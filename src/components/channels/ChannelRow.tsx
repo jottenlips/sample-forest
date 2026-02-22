@@ -10,6 +10,7 @@ import {
 import { colors } from "../../theme/colors";
 import { useAppStore } from "../../state/useAppStore";
 import { SequencerGrid } from "../sequencer/SequencerGrid";
+import { TripletGrid } from "../sequencer/TripletGrid";
 import { useRecorder } from "../../hooks/useRecorder";
 import { pickAudioFile, createSampleFromFile } from "../../utils/audioFiles";
 import { Audio } from "expo-av";
@@ -55,7 +56,7 @@ export function ChannelRow({
   const channel = useAppStore((s) =>
     s.channels.find((c) => c.id === channelId),
   );
-  const { loadSample, removeSample, removeChannel, toggleMute, toggleSolo } =
+  const { loadSample, removeSample, removeChannel, duplicateChannel, toggleMute, toggleSolo } =
     useAppStore();
 
   if (!channel) return null;
@@ -140,6 +141,12 @@ export function ChannelRow({
             >
               <Text style={styles.controlText}>S</Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.controlBtn, styles.dupeBtn]}
+              onPress={() => duplicateChannel(channelId)}
+            >
+              <Text style={styles.controlText}>⧉</Text>
+            </TouchableOpacity>
             {canRemove && (
               <TouchableOpacity
                 style={[styles.controlBtn, styles.removeBtn]}
@@ -153,6 +160,7 @@ export function ChannelRow({
       </View>
 
       <SequencerGrid channelId={channelId} />
+      <TripletGrid channelId={channelId} />
       <View style={styles.sampleRow}>
         {channel.sample ? (
           <View style={styles.sampleSlotRow}>
@@ -200,7 +208,7 @@ export function ChannelRow({
 const styles = StyleSheet.create({
   container: {
     flexDirection: "column",
-    alignItems: "flex-start",
+    alignItems: "stretch",
     paddingVertical: 16,
     paddingHorizontal: 8,
     borderBottomWidth: 1,
@@ -284,6 +292,9 @@ const styles = StyleSheet.create({
     color: colors.recording,
     fontSize: 24,
     fontWeight: "700",
+  },
+  dupeBtn: {
+    backgroundColor: colors.fern,
   },
   removeBtn: {
     backgroundColor: colors.recording,

@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { useAppStore } from '../state/useAppStore';
 import { TransportBar } from '../components/transport/TransportBar';
+import { PunchInBar } from '../components/transport/PunchInBar';
 import { ChannelRow } from '../components/channels/ChannelRow';
 import { useSequencer } from '../hooks/useSequencer';
 import { useChannelPlayer } from '../hooks/useChannelPlayer';
@@ -22,7 +23,7 @@ function ChannelPlayerBridge({
 }) {
   const channel = useAppStore((s) => s.channels.find((c) => c.id === channelId));
   const { trigger } = useChannelPlayer(channel || {
-    id: channelId, label: '', sample: null, steps: [], muted: true, solo: false, volume: 0,
+    id: channelId, label: '', sample: null, steps: [], tripletSteps: [], muted: true, solo: false, volume: 0,
   });
 
   useEffect(() => {
@@ -93,6 +94,7 @@ export function MainScreen({ onEditSample }: MainScreenProps) {
       ))}
 
       <TransportBar onPlay={start} onStop={stop} isPlaying={isPlaying} />
+      <PunchInBar />
 
       <ScrollView style={styles.channelList} contentContainerStyle={styles.channelListContent}>
         {channels.map((ch) => (

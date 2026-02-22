@@ -1,7 +1,9 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, TextInput, StyleSheet } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import Slider from '@react-native-community/slider';
 import { colors } from '../../theme/colors';
 import { useAppStore } from '../../state/useAppStore';
+import { SceneBar } from './SceneBar';
 
 interface TransportBarProps {
   onPlay: () => void;
@@ -10,16 +12,16 @@ interface TransportBarProps {
 }
 
 export function TransportBar({ onPlay, onStop, isPlaying }: TransportBarProps) {
-  const { sequencer, setBpm, setStepCount } = useAppStore();
+  const { sequencer, setBpm, setSwing, setStepCount } = useAppStore();
   const stepOptions = [8, 16, 24, 32];
+  const [localBpm, setLocalBpm] = useState(sequencer.bpm);
+  const [localSwing, setLocalSwing] = useState(sequencer.swing);
+  const [draggingBpm, setDraggingBpm] = useState(false);
+  const [draggingSwing, setDraggingSwing] = useState(false);
 
   return (
     <View style={styles.container}>
-      <View style={styles.titleRow}>
-        <Text style={styles.title}>SAMPLE FOREST</Text>
-      </View>
-
-      <View style={styles.controlsRow}>
+      <View style={styles.topRow}>
         <TouchableOpacity
           style={[styles.playButton, isPlaying && styles.playButtonActive]}
           onPress={isPlaying ? onStop : onPlay}
@@ -28,33 +30,7 @@ export function TransportBar({ onPlay, onStop, isPlaying }: TransportBarProps) {
           <Text style={styles.playButtonText}>{isPlaying ? '■' : '▶'}</Text>
         </TouchableOpacity>
 
-        <View style={styles.bpmContainer}>
-          <Text style={styles.label}>BPM</Text>
-          <View style={styles.bpmControls}>
-            <TouchableOpacity
-              style={styles.bpmButton}
-              onPress={() => setBpm(sequencer.bpm - 1)}
-            >
-              <Text style={styles.bpmButtonText}>-</Text>
-            </TouchableOpacity>
-            <TextInput
-              style={styles.bpmInput}
-              value={String(sequencer.bpm)}
-              keyboardType="number-pad"
-              onChangeText={(text) => {
-                const val = parseInt(text, 10);
-                if (!isNaN(val)) setBpm(val);
-              }}
-              selectTextOnFocus
-            />
-            <TouchableOpacity
-              style={styles.bpmButton}
-              onPress={() => setBpm(sequencer.bpm + 1)}
-            >
-              <Text style={styles.bpmButtonText}>+</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+        <Text style={styles.title}>SAMPLE FOREST</Text>
 
         <View style={styles.stepsContainer}>
           <Text style={styles.label}>STEPS</Text>
@@ -81,6 +57,56 @@ export function TransportBar({ onPlay, onStop, isPlaying }: TransportBarProps) {
           </View>
         </View>
       </View>
+
+      <SceneBar />
+
+      <View style={styles.sliderRow}>
+        <Text style={styles.label}>TEMPO</Text>
+        <Slider
+          style={styles.slider}
+          minimumValue={40}
+          maximumValue={240}
+          step={1}
+          value={draggingBpm ? localBpm : sequencer.bpm}
+          onValueChange={(val) => {
+            setLocalBpm(val);
+            setDraggingBpm(true);
+            setBpm(val);
+          }}
+          onSlidingComplete={(val) => {
+            setBpm(val);
+            setDraggingBpm(false);
+          }}
+          minimumTrackTintColor={colors.sage}
+          maximumTrackTintColor={colors.pine}
+          thumbTintColor={colors.mint}
+        />
+        <Text style={styles.sliderValue}>{draggingBpm ? localBpm : sequencer.bpm}</Text>
+      </View>
+
+      <View style={styles.sliderRow}>
+        <Text style={styles.label}>SWING</Text>
+        <Slider
+          style={styles.slider}
+          minimumValue={0}
+          maximumValue={100}
+          step={1}
+          value={draggingSwing ? localSwing : sequencer.swing}
+          onValueChange={(val) => {
+            setLocalSwing(val);
+            setDraggingSwing(true);
+            setSwing(val);
+          }}
+          onSlidingComplete={(val) => {
+            setSwing(val);
+            setDraggingSwing(false);
+          }}
+          minimumTrackTintColor={colors.sage}
+          maximumTrackTintColor={colors.pine}
+          thumbTintColor={colors.mint}
+        />
+        <Text style={styles.sliderValue}>{draggingSwing ? localSwing : sequencer.swing}%</Text>
+      </View>
     </View>
   );
 }
@@ -90,24 +116,21 @@ const styles = StyleSheet.create({
     backgroundColor: colors.forest,
     paddingHorizontal: 16,
     paddingTop: 8,
-    paddingBottom: 12,
+    paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: colors.pine,
   },
-  titleRow: {
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  title: {
-    color: colors.sage,
-    fontSize: 18,
-    fontWeight: '800',
-    letterSpacing: 3,
-  },
-  controlsRow: {
+  topRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  title: {
+    color: colors.sage,
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: 3,
   },
   playButton: {
     width: 48,
@@ -124,7 +147,7 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontSize: 20,
   },
-  bpmContainer: {
+  stepsContainer: {
     alignItems: 'center',
   },
   label: {
@@ -132,35 +155,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     letterSpacing: 1,
-    marginBottom: 4,
-  },
-  bpmControls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  bpmButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: colors.pine,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bpmButtonText: {
-    color: colors.sage,
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  bpmInput: {
-    color: colors.white,
-    fontSize: 18,
-    fontWeight: '700',
-    textAlign: 'center',
-    width: 50,
-    marginHorizontal: 4,
-  },
-  stepsContainer: {
-    alignItems: 'center',
+    marginBottom: 2,
   },
   stepsRow: {
     flexDirection: 'row',
@@ -182,5 +177,22 @@ const styles = StyleSheet.create({
   },
   stepOptionTextActive: {
     color: colors.forest,
+  },
+  sliderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  slider: {
+    flex: 1,
+    height: 28,
+    marginHorizontal: 8,
+  },
+  sliderValue: {
+    color: colors.sage,
+    fontSize: 12,
+    fontWeight: '700',
+    width: 40,
+    textAlign: 'right',
   },
 });

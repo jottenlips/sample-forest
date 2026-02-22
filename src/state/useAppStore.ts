@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Channel, Sample, SequencerState } from '../types';
+import { Channel, PunchInEffect, Sample, Scene, SequencerState, getTripletStepCount } from '../types';
 
 const DEFAULT_LABELS = ['Kick', 'Snare', 'Hi-Hat', 'Perc'];
 const DEFAULT_STEP_COUNT = 16;
@@ -11,6 +11,7 @@ function createDefaultChannels(stepCount: number): Channel[] {
     label: DEFAULT_LABELS[i],
     sample: null,
     steps: new Array(stepCount).fill(false),
+    tripletSteps: new Array(getTripletStepCount(stepCount)).fill(false),
     muted: false,
     solo: false,
     volume: 0.8,
@@ -23,6 +24,7 @@ function createChannel(id: number, stepCount: number, label?: string): Channel {
     label: label || `Ch ${id + 1}`,
     sample: null,
     steps: new Array(stepCount).fill(false),
+    tripletSteps: new Array(getTripletStepCount(stepCount)).fill(false),
     muted: false,
     solo: false,
     volume: 0.8,
@@ -32,15 +34,30 @@ function createChannel(id: number, stepCount: number, label?: string): Channel {
 interface AppStore {
   channels: Channel[];
   sequencer: SequencerState;
+  scenes: Scene[];
+  activeSceneId: number | null;
+  punchIn: PunchInEffect;
+  repeatBeatOrigin: number | null; // step index where repeat started
+
+  // Punch-in FX
+  setPunchIn: (effect: PunchInEffect) => void;
+
+  // Scene management
+  saveScene: (name?: string) => void;
+  loadScene: (sceneId: number) => void;
+  deleteScene: (sceneId: number) => void;
+  updateScene: (sceneId: number) => void;
 
   // Channel management
   addChannel: (label?: string) => void;
   removeChannel: (channelId: number) => void;
+  duplicateChannel: (channelId: number) => void;
 
   // Channel actions
   loadSample: (channelId: number, sample: Sample) => void;
   removeSample: (channelId: number) => void;
   toggleStep: (channelId: number, stepIndex: number) => void;
+  toggleTripletStep: (channelId: number, stepIndex: number) => void;
   clearSteps: (channelId: number) => void;
   setChannelVolume: (channelId: number, volume: number) => void;
   toggleMute: (channelId: number) => void;
@@ -55,12 +72,16 @@ interface AppStore {
 
   // Sequencer actions
   setBpm: (bpm: number) => void;
+  setSwing: (swing: number) => void;
   setStepCount: (count: number) => void;
   advanceStep: () => void;
   resetStep: () => void;
   setPlaying: (playing: boolean) => void;
   setCurrentStep: (step: number) => void;
+  setCurrentTripletStep: (step: number) => void;
 }
+
+let nextSceneId = 1;
 
 export const useAppStore = create<AppStore>((set, get) => ({
   channels: createDefaultChannels(DEFAULT_STEP_COUNT),
@@ -68,8 +89,106 @@ export const useAppStore = create<AppStore>((set, get) => ({
     bpm: 120,
     stepCount: DEFAULT_STEP_COUNT,
     currentStep: 0,
+    currentTripletStep: 0,
     isPlaying: false,
+    swing: 0,
   },
+  scenes: [],
+  activeSceneId: null,
+  punchIn: null,
+  repeatBeatOrigin: null,
+
+  setPunchIn: (effect) =>
+    set((state) => ({
+      punchIn: effect,
+      // When activating repeat, snapshot the current beat origin (quantize to beat = 4 steps)
+      repeatBeatOrigin: effect === 'repeat'
+        ? Math.floor(state.sequencer.currentStep / 4) * 4
+        : null,
+    })),
+
+  saveScene: (name) =>
+    set((state) => {
+      if (state.scenes.length >= 4) return state;
+      const id = nextSceneId++;
+      const channelSteps: Record<number, boolean[]> = {};
+      const channelTripletSteps: Record<number, boolean[]> = {};
+      state.channels.forEach((ch) => {
+        channelSteps[ch.id] = [...ch.steps];
+        channelTripletSteps[ch.id] = [...ch.tripletSteps];
+      });
+      const scene: Scene = {
+        id,
+        name: name || `Scene ${id}`,
+        channelSteps,
+        channelTripletSteps,
+        bpm: state.sequencer.bpm,
+        stepCount: state.sequencer.stepCount,
+        swing: state.sequencer.swing,
+      };
+      return { scenes: [...state.scenes, scene], activeSceneId: id };
+    }),
+
+  loadScene: (sceneId) =>
+    set((state) => {
+      const scene = state.scenes.find((s) => s.id === sceneId);
+      if (!scene) return state;
+      const tripletCount = getTripletStepCount(scene.stepCount);
+      const newChannels = state.channels.map((ch) => {
+        const savedSteps = scene.channelSteps[ch.id];
+        const savedTripletSteps = scene.channelTripletSteps?.[ch.id];
+        const steps = new Array(scene.stepCount).fill(false);
+        const tripletSteps = new Array(tripletCount).fill(false);
+        if (savedSteps) {
+          savedSteps.forEach((s, i) => { if (i < scene.stepCount) steps[i] = s; });
+        }
+        if (savedTripletSteps) {
+          savedTripletSteps.forEach((s, i) => { if (i < tripletCount) tripletSteps[i] = s; });
+        }
+        return { ...ch, steps, tripletSteps };
+      });
+      return {
+        channels: newChannels,
+        sequencer: {
+          ...state.sequencer,
+          bpm: scene.bpm,
+          stepCount: scene.stepCount,
+          swing: scene.swing,
+          currentStep: 0,
+        },
+        activeSceneId: sceneId,
+      };
+    }),
+
+  deleteScene: (sceneId) =>
+    set((state) => ({
+      scenes: state.scenes.filter((s) => s.id !== sceneId),
+      activeSceneId: state.activeSceneId === sceneId ? null : state.activeSceneId,
+    })),
+
+  updateScene: (sceneId) =>
+    set((state) => {
+      const channelSteps: Record<number, boolean[]> = {};
+      const channelTripletSteps: Record<number, boolean[]> = {};
+      state.channels.forEach((ch) => {
+        channelSteps[ch.id] = [...ch.steps];
+        channelTripletSteps[ch.id] = [...ch.tripletSteps];
+      });
+      return {
+        scenes: state.scenes.map((s) =>
+          s.id === sceneId
+            ? {
+                ...s,
+                channelSteps,
+                channelTripletSteps,
+                bpm: state.sequencer.bpm,
+                stepCount: state.sequencer.stepCount,
+                swing: state.sequencer.swing,
+              }
+            : s
+        ),
+      };
+    }),
 
   addChannel: (label) =>
     set((state) => {
@@ -82,6 +201,25 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set((state) => ({
       channels: state.channels.filter((ch) => ch.id !== channelId),
     })),
+
+  duplicateChannel: (channelId) =>
+    set((state) => {
+      const source = state.channels.find((ch) => ch.id === channelId);
+      if (!source) return state;
+      const newId = nextChannelId++;
+      const dupe: Channel = {
+        ...source,
+        id: newId,
+        label: `${source.label} copy`,
+        steps: [...source.steps],
+        tripletSteps: [...source.tripletSteps],
+        sample: source.sample ? { ...source.sample, id: `sample_${Date.now()}` } : null,
+      };
+      const idx = state.channels.findIndex((ch) => ch.id === channelId);
+      const newChannels = [...state.channels];
+      newChannels.splice(idx + 1, 0, dupe);
+      return { channels: newChannels };
+    }),
 
   loadSample: (channelId, sample) =>
     set((state) => ({
@@ -109,11 +247,27 @@ export const useAppStore = create<AppStore>((set, get) => ({
       ),
     })),
 
+  toggleTripletStep: (channelId, stepIndex) =>
+    set((state) => ({
+      channels: state.channels.map((ch) =>
+        ch.id === channelId
+          ? {
+              ...ch,
+              tripletSteps: ch.tripletSteps.map((s, i) => (i === stepIndex ? !s : s)),
+            }
+          : ch
+      ),
+    })),
+
   clearSteps: (channelId) =>
     set((state) => ({
       channels: state.channels.map((ch) =>
         ch.id === channelId
-          ? { ...ch, steps: new Array(state.sequencer.stepCount).fill(false) }
+          ? {
+              ...ch,
+              steps: new Array(state.sequencer.stepCount).fill(false),
+              tripletSteps: new Array(getTripletStepCount(state.sequencer.stepCount)).fill(false),
+            }
           : ch
       ),
     })),
@@ -187,19 +341,28 @@ export const useAppStore = create<AppStore>((set, get) => ({
       sequencer: { ...state.sequencer, bpm: Math.max(40, Math.min(240, bpm)) },
     })),
 
+  setSwing: (swing) =>
+    set((state) => ({
+      sequencer: { ...state.sequencer, swing: Math.max(0, Math.min(100, swing)) },
+    })),
+
   setStepCount: (count) =>
     set((state) => {
+      const tripletCount = getTripletStepCount(count);
       const newChannels = state.channels.map((ch) => {
         const newSteps = new Array(count).fill(false);
-        // Preserve existing step pattern
         ch.steps.forEach((s, i) => {
           if (i < count) newSteps[i] = s;
         });
-        return { ...ch, steps: newSteps };
+        const newTripletSteps = new Array(tripletCount).fill(false);
+        ch.tripletSteps.forEach((s, i) => {
+          if (i < tripletCount) newTripletSteps[i] = s;
+        });
+        return { ...ch, steps: newSteps, tripletSteps: newTripletSteps };
       });
       return {
         channels: newChannels,
-        sequencer: { ...state.sequencer, stepCount: count, currentStep: 0 },
+        sequencer: { ...state.sequencer, stepCount: count, currentStep: 0, currentTripletStep: 0 },
       };
     }),
 
@@ -228,5 +391,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setCurrentStep: (step) =>
     set((state) => ({
       sequencer: { ...state.sequencer, currentStep: step },
+    })),
+
+  setCurrentTripletStep: (step) =>
+    set((state) => ({
+      sequencer: { ...state.sequencer, currentTripletStep: step },
     })),
 }));
