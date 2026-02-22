@@ -1,0 +1,16 @@
+{
+  "name": "sample-forest-backend",
+  "version": "1.0.0",
+  "description": "Ampt backend serving the Sample Forest web app as static assets",
+  "type": "module",
+  "dependencies": {
+    "@ampt/sdk": "latest"
+  },
+  "ampt": {
+    "static": [
+      "static"
+    ],
+    "org": "jottenlips823486",
+    "app": "sample-forest"
+  }
+}
