@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Modal, StyleSheet } from 'react-native';
+import { Modal, Platform, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { MainScreen } from './src/screens/MainScreen';
@@ -36,5 +36,6 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: colors.forest,
+    ...(Platform.OS === 'web' ? { userSelect: 'none' as any } : {}),
   },
 });
