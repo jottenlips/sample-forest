@@ -1,11 +1,14 @@
-import { Platform } from 'react-native';
-import * as DocumentPicker from 'expo-document-picker';
-import { Sample } from '../types';
+import { Platform } from "react-native";
+import * as DocumentPicker from "expo-document-picker";
+import { Sample } from "../types";
 
 // On web we use blob URLs, on native we use expo-file-system
-async function saveSampleFileNative(sourceUri: string, name: string): Promise<string> {
-  const { Paths, Directory, File } = await import('expo-file-system');
-  const samplesDir = new Directory(Paths.document, 'samples');
+async function saveSampleFileNative(
+  sourceUri: string,
+  name: string,
+): Promise<string> {
+  const { Paths, Directory, File } = await import("expo-file-system");
+  const samplesDir = new Directory(Paths.document, "samples");
   if (!samplesDir.exists) {
     samplesDir.create();
   }
@@ -15,8 +18,11 @@ async function saveSampleFileNative(sourceUri: string, name: string): Promise<st
   return destFile.uri;
 }
 
-export async function saveSampleFile(sourceUri: string, name: string): Promise<string> {
-  if (Platform.OS === 'web') {
+export async function saveSampleFile(
+  sourceUri: string,
+  name: string,
+): Promise<string> {
+  if (Platform.OS === "web") {
     // On web, blob URLs are already usable directly
     return sourceUri;
   }
@@ -24,17 +30,17 @@ export async function saveSampleFile(sourceUri: string, name: string): Promise<s
 }
 
 export async function deleteSampleFile(uri: string): Promise<void> {
-  if (Platform.OS === 'web') {
+  if (Platform.OS === "web") {
     // Revoke blob URL if it is one
     try {
-      if (uri.startsWith('blob:')) {
+      if (uri.startsWith("blob:")) {
         URL.revokeObjectURL(uri);
       }
     } catch {}
     return;
   }
   try {
-    const { File } = await import('expo-file-system');
+    const { File } = await import("expo-file-system");
     const file = new File(uri);
     if (file.exists) {
       file.delete();
@@ -42,13 +48,17 @@ export async function deleteSampleFile(uri: string): Promise<void> {
   } catch {}
 }
 
-export async function pickAudioFile(): Promise<{ uri: string; name: string } | null> {
-  if (Platform.OS === 'web') {
+export async function pickAudioFile(): Promise<{
+  uri: string;
+  name: string;
+} | null> {
+  if (Platform.OS === "web") {
     // Use a file input on web
     return new Promise((resolve) => {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = 'audio/*';
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept =
+        ".wav,.mp3,audio/wav,audio/x-wav,audio/mpeg,audio/mp3,audio/*";
       input.onchange = () => {
         const file = input.files?.[0];
         if (!file) {
@@ -64,7 +74,7 @@ export async function pickAudioFile(): Promise<{ uri: string; name: string } | n
   }
 
   const result = await DocumentPicker.getDocumentAsync({
-    type: 'audio/*',
+    type: "audio/*",
     copyToCacheDirectory: true,
   });
 
