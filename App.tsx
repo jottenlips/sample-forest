@@ -5,10 +5,12 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { MainScreen } from './src/screens/MainScreen';
 import { SampleEditScreen } from './src/screens/SampleEditScreen';
 import { ChopScreen } from './src/screens/ChopScreen';
+import { SynthModal } from './src/components/synth/SynthModal';
 import { colors } from './src/theme/colors';
 
 export default function App() {
   const [editingChannel, setEditingChannel] = useState<number | null>(null);
+  const [synthChannel, setSynthChannel] = useState<number | null>(null);
   const [showChop, setShowChop] = useState(false);
 
   return (
@@ -16,6 +18,7 @@ export default function App() {
       <SafeAreaProvider>
         <MainScreen
           onEditSample={(channelId) => setEditingChannel(channelId)}
+          onOpenSynth={(channelId) => setSynthChannel(channelId)}
           onChopSong={() => setShowChop(true)}
         />
 
@@ -29,6 +32,20 @@ export default function App() {
             <SampleEditScreen
               channelId={editingChannel}
               onClose={() => setEditingChannel(null)}
+            />
+          )}
+        </Modal>
+
+        <Modal
+          visible={synthChannel !== null}
+          animationType="slide"
+          presentationStyle="pageSheet"
+          onRequestClose={() => setSynthChannel(null)}
+        >
+          {synthChannel !== null && (
+            <SynthModal
+              channelId={synthChannel}
+              onClose={() => setSynthChannel(null)}
             />
           )}
         </Modal>

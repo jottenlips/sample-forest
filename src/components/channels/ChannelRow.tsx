@@ -43,6 +43,7 @@ async function getAudioDuration(uri: string): Promise<number> {
 interface ChannelRowProps {
   channelId: number;
   onEditSample: (channelId: number) => void;
+  onOpenSynth: (channelId: number) => void;
   triggerRef: React.MutableRefObject<Map<number, () => void>>;
   canRemove: boolean;
 }
@@ -50,6 +51,7 @@ interface ChannelRowProps {
 export function ChannelRow({
   channelId,
   onEditSample,
+  onOpenSynth,
   triggerRef,
   canRemove,
 }: ChannelRowProps) {
@@ -198,6 +200,9 @@ export function ChannelRow({
             <TouchableOpacity style={styles.actionBtn} onPress={handleUpload}>
               <Text style={styles.actionBtnText}>↑ Load</Text>
             </TouchableOpacity>
+            <TouchableOpacity style={styles.actionBtn} onPress={() => onOpenSynth(channelId)}>
+              <Text style={styles.actionBtnText}>~ Synth</Text>
+            </TouchableOpacity>
           </View>
         )}
       </View>
@@ -308,7 +313,7 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     paddingHorizontal: 6,
     paddingVertical: 4,
-    width: 100,
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
     height: 50,

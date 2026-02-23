@@ -1,12 +1,12 @@
 import { create } from 'zustand';
 import { Channel, PunchInEffect, Sample, Scene, SequencerState, getTripletStepCount } from '../types';
 
-const DEFAULT_LABELS = ['Kick', 'Snare', 'Hi-Hat', 'Perc'];
+const DEFAULT_LABELS = ['Kick', 'Snare', 'Hi-Hat'];
 const DEFAULT_STEP_COUNT = 16;
-let nextChannelId = 4;
+let nextChannelId = 3;
 
 function createDefaultChannels(stepCount: number): Channel[] {
-  return Array.from({ length: 4 }, (_, i) => ({
+  return Array.from({ length: 3 }, (_, i) => ({
     id: i,
     label: DEFAULT_LABELS[i],
     sample: null,
@@ -133,6 +133,30 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set((state) => {
       const scene = state.scenes.find((s) => s.id === sceneId);
       if (!scene) return state;
+
+      // Auto-save the current scene before switching
+      let scenes = state.scenes;
+      if (state.activeSceneId !== null) {
+        const channelSteps: Record<number, boolean[]> = {};
+        const channelTripletSteps: Record<number, boolean[]> = {};
+        state.channels.forEach((ch) => {
+          channelSteps[ch.id] = [...ch.steps];
+          channelTripletSteps[ch.id] = [...ch.tripletSteps];
+        });
+        scenes = scenes.map((s) =>
+          s.id === state.activeSceneId
+            ? {
+                ...s,
+                channelSteps,
+                channelTripletSteps,
+                bpm: state.sequencer.bpm,
+                stepCount: state.sequencer.stepCount,
+                swing: state.sequencer.swing,
+              }
+            : s
+        );
+      }
+
       const tripletCount = getTripletStepCount(scene.stepCount);
       const newChannels = state.channels.map((ch) => {
         const savedSteps = scene.channelSteps[ch.id];
@@ -148,6 +172,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         return { ...ch, steps, tripletSteps };
       });
       return {
+        scenes,
         channels: newChannels,
         sequencer: {
           ...state.sequencer,

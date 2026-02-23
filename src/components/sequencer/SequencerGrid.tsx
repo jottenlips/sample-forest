@@ -3,6 +3,8 @@ import { View, StyleSheet } from 'react-native';
 import { StepButton } from './StepButton';
 import { useAppStore } from '../../state/useAppStore';
 
+const STEPS_PER_ROW = 16;
+
 interface SequencerGridProps {
   channelId: number;
 }
@@ -15,16 +17,31 @@ export function SequencerGrid({ channelId }: SequencerGridProps) {
 
   if (!channel) return null;
 
+  const rows: number[][] = [];
+  for (let i = 0; i < channel.steps.length; i += STEPS_PER_ROW) {
+    rows.push(
+      Array.from({ length: Math.min(STEPS_PER_ROW, channel.steps.length - i) }, (_, j) => i + j)
+    );
+  }
+
   return (
     <View style={styles.container}>
-      {channel.steps.map((active, i) => (
-        <StepButton
-          key={i}
-          active={active}
-          isCurrentStep={isPlaying && currentStep === i}
-          isDownbeat={i % 4 === 0}
-          onPress={() => toggleStep(channelId, i)}
-        />
+      {rows.map((row, rowIdx) => (
+        <View key={rowIdx} style={styles.row}>
+          {row.map((i) => (
+            <StepButton
+              key={i}
+              active={channel.steps[i]}
+              isCurrentStep={isPlaying && currentStep === i}
+              isDownbeat={i % 4 === 0}
+              onPress={() => toggleStep(channelId, i)}
+            />
+          ))}
+          {row.length < STEPS_PER_ROW &&
+            Array.from({ length: STEPS_PER_ROW - row.length }, (_, j) => (
+              <View key={`spacer-${j}`} style={styles.spacer} />
+            ))}
+        </View>
       ))}
     </View>
   );
@@ -32,10 +49,15 @@ export function SequencerGrid({ channelId }: SequencerGridProps) {
 
 const styles = StyleSheet.create({
   container: {
+    gap: 2,
+  },
+  row: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    gap: 2,
+  },
+  spacer: {
     flex: 1,
-    alignItems: 'center',
-    gap: 1,
+    height: 34,
+    margin: 1,
   },
 });

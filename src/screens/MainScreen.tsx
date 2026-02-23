@@ -12,6 +12,7 @@ import { setupAudioMode } from '../utils/permissions';
 
 interface MainScreenProps {
   onEditSample: (channelId: number) => void;
+  onOpenSynth: (channelId: number) => void;
   onChopSong: () => void;
 }
 
@@ -37,7 +38,7 @@ function ChannelPlayerBridge({
   return null;
 }
 
-export function MainScreen({ onEditSample, onChopSong }: MainScreenProps) {
+export function MainScreen({ onEditSample, onOpenSynth, onChopSong }: MainScreenProps) {
   const channels = useAppStore((s) => s.channels);
   const addChannel = useAppStore((s) => s.addChannel);
   const triggerRef = useRef<Map<number, () => void>>(new Map());
@@ -95,7 +96,15 @@ export function MainScreen({ onEditSample, onChopSong }: MainScreenProps) {
       ))}
 
       <TransportBar onPlay={start} onStop={stop} isPlaying={isPlaying} />
-      <PunchInBar />
+
+      <View style={styles.buttonRow}>
+        <TouchableOpacity style={styles.addChannelBtn} onPress={() => addChannel()}>
+          <Text style={styles.addChannelText}>+ Add Channel</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.chopBtn} onPress={onChopSong}>
+          <Text style={styles.chopBtnText}>Auto Chop Song</Text>
+        </TouchableOpacity>
+      </View>
 
       <ScrollView style={styles.channelList} contentContainerStyle={styles.channelListContent}>
         {channels.map((ch) => (
@@ -103,19 +112,13 @@ export function MainScreen({ onEditSample, onChopSong }: MainScreenProps) {
             key={ch.id}
             channelId={ch.id}
             onEditSample={onEditSample}
+            onOpenSynth={onOpenSynth}
             triggerRef={triggerRef}
             canRemove={channels.length > 1}
           />
         ))}
 
-        <View style={styles.buttonRow}>
-          <TouchableOpacity style={styles.addChannelBtn} onPress={() => addChannel()}>
-            <Text style={styles.addChannelText}>+ Add Channel</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.chopBtn} onPress={onChopSong}>
-            <Text style={styles.chopBtnText}>Chop Song</Text>
-          </TouchableOpacity>
-        </View>
+        <PunchInBar />
       </ScrollView>
     </SafeAreaView>
   );

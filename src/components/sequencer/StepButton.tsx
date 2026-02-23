@@ -38,9 +38,8 @@ export function StepButton({
 const styles = StyleSheet.create({
   step: {
     flex: 1,
-    aspectRatio: 1,
-    borderRadius: 4,
     height: 34,
+    borderRadius: 4,
     margin: 1,
   },
 });

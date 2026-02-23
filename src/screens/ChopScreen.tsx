@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useRef, useEffect } from "react";
 import {
   View,
   Text,
@@ -7,14 +7,31 @@ import {
   StyleSheet,
   Dimensions,
   ActivityIndicator,
+  ScrollView,
 } from "react-native";
 import Svg, { Rect, Line } from "react-native-svg";
+import Slider from "@react-native-community/slider";
+import { Audio } from "expo-av";
 import { colors } from "../theme/colors";
 import { useAppStore } from "../state/useAppStore";
 import { encodeWav } from "../utils/wavEncoder";
-import { detectBpm, beatLengthSec, pickRandomBeats } from "../utils/bpmDetect";
+import { detectBpm, beatLengthSec } from "../utils/bpmDetect";
 
 const NUM_CHOPS = 8;
+
+/** Pick `count` unique random start times (seconds) that fit within duration - chopLen */
+function pickRandomStarts(duration: number, chopLen: number, count: number): number[] {
+  const maxStart = duration - chopLen;
+  if (maxStart <= 0) return [0];
+  const picked = new Set<number>();
+  const attempts = count * 20;
+  for (let i = 0; i < attempts && picked.size < count; i++) {
+    // Round to nearest ms to avoid near-duplicates
+    const t = Math.round(Math.random() * maxStart * 1000) / 1000;
+    picked.add(t);
+  }
+  return [...picked].sort((a, b) => a - b);
+}
 
 interface ChopScreenProps {
   onClose: () => void;
@@ -29,22 +46,19 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
   const [waveformData, setWaveformData] = useState<number[]>([]);
   const [fileName, setFileName] = useState("");
   const [bpm, setBpm] = useState<number | null>(null);
-  const [selectedBeats, setSelectedBeats] = useState<number[]>([]);
-  const [youtubeUrl, setYoutubeUrl] = useState("");
+  const [chopLen, setChopLen] = useState(0.5); // seconds per chop
+  const [chopStarts, setChopStarts] = useState<number[]>([]); // start times in seconds
   const [matchTempo, setMatchTempo] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
   const [error, setError] = useState("");
   const [chopping, setChopping] = useState(false);
+  const [previewingIdx, setPreviewingIdx] = useState<number | null>(null);
+  const previewSoundRef = useRef<Audio.Sound | null>(null);
 
   const screenWidth = Dimensions.get("window").width;
   const waveformWidth = screenWidth - 48;
   const waveformHeight = 140;
-
-  const totalBeats =
-    audioBuffer && bpm
-      ? Math.floor(audioBuffer.duration / beatLengthSec(bpm))
-      : 0;
 
   const processAudioBuffer = useCallback(
     (decoded: AudioBuffer, name: string) => {
@@ -66,11 +80,19 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
       const max = Math.max(...waveform, 0.01);
       setWaveformData(waveform.map((v) => v / max));
 
-      // Detect BPM and pick random beats
+      // Detect BPM and use beat length as initial chop length
       const detected = detectBpm(decoded);
       setBpm(detected);
-      const beats = Math.floor(decoded.duration / beatLengthSec(detected));
-      setSelectedBeats(pickRandomBeats(beats, NUM_CHOPS));
+      const detectedBeatLen = beatLengthSec(detected);
+      setChopLen(detectedBeatLen);
+      setChopStarts(pickRandomStarts(decoded.duration, detectedBeatLen, NUM_CHOPS));
+    },
+    [],
+  );
+
+  const handleChopLenChange = useCallback(
+    (val: number) => {
+      setChopLen(val);
     },
     [],
   );
@@ -104,78 +126,93 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
     input.click();
   }, []);
 
-  const handleYouTubeLoad = useCallback(async () => {
-    const url = youtubeUrl.trim();
-    if (!url) return;
+  const handleReshuffle = useCallback(() => {
+    if (!audioBuffer) return;
+    setChopStarts(pickRandomStarts(audioBuffer.duration, chopLen, NUM_CHOPS));
+  }, [audioBuffer, chopLen]);
 
-    // Extract video ID from various YouTube URL formats
-    const match = url.match(
-      /(?:v=|youtu\.be\/|embed\/|shorts\/)([A-Za-z0-9_-]{11})/,
-    );
-    if (!match) {
-      setError("Invalid YouTube URL");
-      return;
+  const stopPreview = useCallback(async () => {
+    if (previewSoundRef.current) {
+      try {
+        await previewSoundRef.current.stopAsync();
+        await previewSoundRef.current.unloadAsync();
+      } catch {}
+      previewSoundRef.current = null;
     }
-    const videoId = match[1];
+    setPreviewingIdx(null);
+  }, []);
 
-    setLoading(true);
-    setError("");
-    setLoadingMessage("Fetching from YouTube...");
+  const handlePreviewChop = useCallback(
+    async (idx: number) => {
+      if (!audioBuffer || chopLen <= 0) return;
 
-    try {
-      // Use Piped API to get proxied audio stream
-      const res = await fetch(
-        `https://pipedapi.kavin.rocks/streams/${videoId}`,
-      );
-      if (!res.ok) throw new Error("Failed to fetch video info");
-      const data = await res.json();
-
-      if (!data.audioStreams?.length) {
-        throw new Error("No audio streams found");
+      if (previewingIdx === idx) {
+        await stopPreview();
+        return;
       }
 
-      // Pick highest bitrate audio stream
-      const best = data.audioStreams.reduce((a: any, b: any) =>
-        (a.bitrate ?? 0) > (b.bitrate ?? 0) ? a : b,
-      );
+      await stopPreview();
 
-      setLoadingMessage("Downloading audio...");
-      const audioRes = await fetch(best.url);
-      if (!audioRes.ok) throw new Error("Failed to download audio");
+      try {
+        const sampleRate = audioBuffer.sampleRate;
+        const startSec = chopStarts[idx];
+        const sliceStart = Math.floor(startSec * sampleRate);
+        const sliceEnd = Math.min(
+          sliceStart + Math.floor(chopLen * sampleRate),
+          audioBuffer.length,
+        );
 
-      const arrayBuffer = await audioRes.arrayBuffer();
-      const audioCtx = new AudioContext();
-      setLoadingMessage("Analyzing tempo...");
-      const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+        const wavBlob = encodeWav(audioBuffer, sliceStart, sliceEnd);
+        const blobUrl = URL.createObjectURL(wavBlob);
 
-      const title = data.title || `YouTube ${videoId}`;
-      processAudioBuffer(decoded, title);
-    } catch (e: any) {
-      console.error("YouTube fetch failed:", e);
-      setError(e.message || "Failed to load YouTube audio");
-    } finally {
-      setLoading(false);
-    }
-  }, [youtubeUrl, processAudioBuffer]);
+        const { sound } = await Audio.Sound.createAsync(
+          { uri: blobUrl },
+          { shouldPlay: true },
+        );
+        previewSoundRef.current = sound;
+        setPreviewingIdx(idx);
 
-  const handleReshuffle = useCallback(() => {
-    if (!totalBeats) return;
-    setSelectedBeats(pickRandomBeats(totalBeats, NUM_CHOPS));
-  }, [totalBeats]);
+        sound.setOnPlaybackStatusUpdate((status) => {
+          if (status.isLoaded && status.didJustFinish) {
+            setPreviewingIdx(null);
+            sound.unloadAsync().catch(() => {});
+            previewSoundRef.current = null;
+          }
+        });
+      } catch (err) {
+        console.error("Preview failed:", err);
+        setPreviewingIdx(null);
+      }
+    },
+    [audioBuffer, chopLen, chopStarts, previewingIdx, stopPreview],
+  );
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (previewSoundRef.current) {
+        previewSoundRef.current.unloadAsync().catch(() => {});
+      }
+    };
+  }, []);
 
   const handleChop = useCallback(async () => {
-    if (!audioBuffer || !bpm || selectedBeats.length === 0) return;
+    if (!audioBuffer || chopLen <= 0 || chopStarts.length === 0) return;
     setChopping(true);
+    await stopPreview();
 
     try {
       const sampleRate = audioBuffer.sampleRate;
-      const beatSamples = Math.floor(beatLengthSec(bpm) * sampleRate);
-      const rate = matchTempo ? sequencerBpm / bpm : 1.0;
+      const effectiveBpm = 60 / chopLen;
+      const rate = matchTempo ? sequencerBpm / effectiveBpm : 1.0;
 
-      for (let i = 0; i < selectedBeats.length; i++) {
-        const beatIndex = selectedBeats[i];
-        const sliceStart = beatIndex * beatSamples;
-        const sliceEnd = Math.min(sliceStart + beatSamples, audioBuffer.length);
+      for (let i = 0; i < chopStarts.length; i++) {
+        const startSec = chopStarts[i];
+        const sliceStart = Math.floor(startSec * sampleRate);
+        const sliceEnd = Math.min(
+          sliceStart + Math.floor(chopLen * sampleRate),
+          audioBuffer.length,
+        );
 
         const wavBlob = encodeWav(audioBuffer, sliceStart, sliceEnd);
         const blobUrl = URL.createObjectURL(wavBlob);
@@ -199,7 +236,7 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
         const wMax = Math.max(...sliceWaveform, 0.01);
         const normalizedWaveform = sliceWaveform.map((v) => v / wMax);
 
-        const label = `Beat ${beatIndex + 1}`;
+        const label = `Chop ${i + 1}`;
         addChannel(label);
 
         const currentChannels = useAppStore.getState().channels;
@@ -208,7 +245,7 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
         loadSample(newChannel.id, {
           id: `sample_${Date.now()}_${i}`,
           uri: blobUrl,
-          name: `${fileName} [beat ${beatIndex + 1}]`,
+          name: `${fileName} [${startSec.toFixed(2)}s]`,
           durationMs,
           trimStartMs: 0,
           trimEndMs: durationMs,
@@ -227,27 +264,48 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
     }
   }, [
     audioBuffer,
-    bpm,
-    selectedBeats,
+    chopLen,
+    chopStarts,
     fileName,
     matchTempo,
     sequencerBpm,
     addChannel,
     loadSample,
     onClose,
+    stopPreview,
   ]);
 
-  // Build waveform bars with selected-beat highlighting
+  // Remove a chop by index
+  const removeChop = useCallback((idx: number) => {
+    setChopStarts((prev) => prev.filter((_, i) => i !== idx));
+  }, []);
+
+  // Reshuffle a single chop to a new random position
+  const reshuffleSingleChop = useCallback(
+    (idx: number) => {
+      if (!audioBuffer) return;
+      const maxStart = audioBuffer.duration - chopLen;
+      if (maxStart <= 0) return;
+      setChopStarts((prev) => {
+        const newStart = Math.round(Math.random() * maxStart * 1000) / 1000;
+        const updated = [...prev];
+        updated[idx] = newStart;
+        return updated.sort((a, b) => a - b);
+      });
+    },
+    [audioBuffer, chopLen],
+  );
+
+  // Build waveform bars with selected-chop highlighting
   const bars = waveformData.map((amp, i) => {
     const percent = i / waveformData.length;
     let highlighted = false;
 
-    if (audioBuffer && bpm && totalBeats > 0) {
-      const beatLen = beatLengthSec(bpm);
-      for (const beatIdx of selectedBeats) {
-        const beatStart = (beatIdx * beatLen) / audioBuffer.duration;
-        const beatEnd = ((beatIdx + 1) * beatLen) / audioBuffer.duration;
-        if (percent >= beatStart && percent < beatEnd) {
+    if (audioBuffer && chopLen > 0) {
+      for (const startSec of chopStarts) {
+        const chopStart = startSec / audioBuffer.duration;
+        const chopEnd = (startSec + chopLen) / audioBuffer.duration;
+        if (percent >= chopStart && percent < chopEnd) {
           highlighted = true;
           break;
         }
@@ -268,14 +326,12 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
     };
   });
 
-  // Beat marker lines for selected beats
-  const beatMarkers =
-    audioBuffer && bpm
-      ? selectedBeats.map((beatIdx) => {
-          const beatLen = beatLengthSec(bpm);
-          const x =
-            ((beatIdx * beatLen) / audioBuffer.duration) * waveformWidth;
-          return { key: beatIdx, x };
+  // Chop marker lines
+  const chopMarkers =
+    audioBuffer && chopLen > 0
+      ? chopStarts.map((startSec, idx) => {
+          const x = (startSec / audioBuffer.duration) * waveformWidth;
+          return { key: idx, x };
         })
       : [];
 
@@ -285,7 +341,7 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
         <TouchableOpacity onPress={onClose}>
           <Text style={styles.closeBtn}>Cancel</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Chop Song</Text>
+        <Text style={styles.title}>Auto Chop Song</Text>
         <View style={{ width: 60 }} />
       </View>
 
@@ -305,43 +361,21 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
                 <Text style={styles.uploadIcon}>+</Text>
                 <Text style={styles.uploadText}>Upload File</Text>
               </TouchableOpacity>
-              {/* 
-              <View style={styles.dividerRow}>
-                <View style={styles.dividerLine} />
-                <Text style={styles.dividerText}>or</Text>
-                <View style={styles.dividerLine} />
-              </View>
-
-              <View style={styles.youtubeInputRow}>
-                <TextInput
-                  style={styles.youtubeInput}
-                  placeholder="Paste YouTube link..."
-                  placeholderTextColor={colors.stone}
-                  value={youtubeUrl}
-                  onChangeText={setYoutubeUrl}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                <TouchableOpacity
-                  style={[styles.youtubeGoBtn, !youtubeUrl.trim() && styles.youtubeBtnDisabled]}
-                  onPress={handleYouTubeLoad}
-                  disabled={!youtubeUrl.trim()}
-                >
-                  <Text style={styles.youtubeGoBtnText}>Load</Text>
-                </TouchableOpacity>
-              </View> */}
 
               {!!error && <Text style={styles.errorText}>{error}</Text>}
             </>
           )}
         </View>
       ) : (
-        <View style={styles.content}>
+        <ScrollView
+          style={styles.scrollContent}
+          contentContainerStyle={styles.scrollContentInner}
+        >
           <Text style={styles.fileName} numberOfLines={1}>
             {fileName}
           </Text>
 
-          {/* BPM + beat info */}
+          {/* BPM + info */}
           <View style={styles.bpmRow}>
             <View style={styles.bpmBadge}>
               <Text style={styles.bpmValue}>{bpm}</Text>
@@ -349,12 +383,37 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
             </View>
             <View style={styles.infoCol}>
               <Text style={styles.info}>
-                {audioBuffer.duration.toFixed(1)}s | {totalBeats} beats |{" "}
-                {beatLengthSec(bpm!).toFixed(3)}s per beat
+                {audioBuffer.duration.toFixed(1)}s total
               </Text>
               <Text style={styles.info}>
-                {selectedBeats.length} random beats selected
+                {chopStarts.length} chops selected
               </Text>
+            </View>
+          </View>
+
+          {/* Seconds per beat / chop length slider */}
+          <View style={styles.controlSection}>
+            <View style={styles.controlHeader}>
+              <Text style={styles.controlLabel}>Seconds per Beat</Text>
+              <Text style={styles.controlValue}>
+                {chopLen.toFixed(3)}s
+              </Text>
+            </View>
+            <Slider
+              style={styles.slider}
+              minimumValue={0.1}
+              maximumValue={2.0}
+              step={0.001}
+              value={chopLen}
+              onValueChange={handleChopLenChange}
+              minimumTrackTintColor={colors.sage}
+              maximumTrackTintColor={colors.pine}
+              thumbTintColor={colors.mint}
+            />
+            <View style={styles.sliderLabels}>
+              <Text style={styles.sliderLabel}>0.1s</Text>
+              <Text style={styles.sliderLabel}>1.0s</Text>
+              <Text style={styles.sliderLabel}>2.0s</Text>
             </View>
           </View>
 
@@ -371,14 +430,14 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
             <Text style={styles.tempoToggleText}>
               Match sequencer tempo ({sequencerBpm} BPM)
             </Text>
-            {matchTempo && bpm && (
+            {matchTempo && chopLen > 0 && (
               <Text style={styles.tempoRate}>
-                {(sequencerBpm / bpm).toFixed(2)}x
+                {(sequencerBpm / (60 / chopLen)).toFixed(2)}x
               </Text>
             )}
           </TouchableOpacity>
 
-          {/* Waveform with highlighted beats */}
+          {/* Waveform with highlighted chops */}
           <View
             style={[
               styles.waveformContainer,
@@ -397,7 +456,7 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
                   fill={bar.fill}
                 />
               ))}
-              {beatMarkers.map((m) => (
+              {chopMarkers.map((m) => (
                 <Line
                   key={m.key}
                   x1={m.x}
@@ -412,24 +471,63 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
             </Svg>
           </View>
 
-          {/* Beat labels under waveform */}
+          {/* Chop labels under waveform */}
           <View style={[styles.beatLabels, { width: waveformWidth }]}>
             {audioBuffer &&
-              bpm &&
-              selectedBeats.map((beatIdx) => {
-                const beatLen = beatLengthSec(bpm);
-                const beatCenter =
-                  (((beatIdx + 0.5) * beatLen) / audioBuffer.duration) *
+              chopStarts.map((startSec, idx) => {
+                const centerX =
+                  ((startSec + chopLen / 2) / audioBuffer.duration) *
                   waveformWidth;
                 return (
                   <Text
-                    key={beatIdx}
-                    style={[styles.beatLabel, { left: beatCenter - 8 }]}
+                    key={idx}
+                    style={[styles.beatLabel, { left: centerX - 8 }]}
                   >
-                    {beatIdx + 1}
+                    {idx + 1}
                   </Text>
                 );
               })}
+          </View>
+
+          {/* Selected chops - preview buttons */}
+          <Text style={styles.sectionLabel}>Selected Chops</Text>
+          <View style={styles.chopList}>
+            {chopStarts.map((startSec, idx) => {
+              const isPreviewing = previewingIdx === idx;
+              return (
+                <View key={idx} style={styles.chopItem}>
+                  <TouchableOpacity
+                    style={[
+                      styles.chopPreviewBtn,
+                      isPreviewing && styles.chopPreviewBtnActive,
+                    ]}
+                    onPress={() => handlePreviewChop(idx)}
+                  >
+                    <Text style={styles.chopPreviewIcon}>
+                      {isPreviewing ? "■" : "▶"}
+                    </Text>
+                  </TouchableOpacity>
+                  <Text style={styles.chopItemText}>
+                    Chop {idx + 1}
+                  </Text>
+                  <Text style={styles.chopItemTime}>
+                    {startSec.toFixed(2)}s
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.chopShuffleBtn}
+                    onPress={() => reshuffleSingleChop(idx)}
+                  >
+                    <Text style={styles.chopShuffleText}>↻</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.chopRemoveBtn}
+                    onPress={() => removeChop(idx)}
+                  >
+                    <Text style={styles.chopRemoveText}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
           </View>
 
           {/* Action buttons */}
@@ -437,7 +535,7 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
             style={styles.reshuffleBtn}
             onPress={handleReshuffle}
           >
-            <Text style={styles.reshuffleBtnText}>Reshuffle Beats</Text>
+            <Text style={styles.reshuffleBtnText}>Reshuffle All</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -449,11 +547,11 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
               <ActivityIndicator size="small" color={colors.forest} />
             ) : (
               <Text style={styles.chopBtnText}>
-                Chop {selectedBeats.length} Beats
+                Chop {chopStarts.length} Beats
               </Text>
             )}
           </TouchableOpacity>
-        </View>
+        </ScrollView>
       )}
     </View>
   );
@@ -514,63 +612,18 @@ const styles = StyleSheet.create({
     color: colors.sage,
     fontSize: 14,
   },
-  dividerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    width: 200,
-    gap: 12,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: colors.pine,
-  },
-  dividerText: {
-    color: colors.stone,
-    fontSize: 13,
-  },
-  youtubeInputRow: {
-    flexDirection: "row",
-    width: "80%",
-    maxWidth: 400,
-    gap: 8,
-  },
-  youtubeInput: {
-    flex: 1,
-    height: 40,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.pine,
-    backgroundColor: colors.forest,
-    color: colors.cloud,
-    paddingHorizontal: 12,
-    fontSize: 14,
-  },
-  youtubeGoBtn: {
-    height: 40,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    backgroundColor: colors.fern,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  youtubeBtnDisabled: {
-    opacity: 0.4,
-  },
-  youtubeGoBtnText: {
-    color: colors.white,
-    fontSize: 14,
-    fontWeight: "700",
-  },
   errorText: {
     color: colors.recording,
     fontSize: 13,
     marginTop: 8,
   },
-  content: {
+  scrollContent: {
     flex: 1,
+  },
+  scrollContentInner: {
     paddingHorizontal: 24,
     paddingTop: 16,
+    paddingBottom: 40,
   },
   fileName: {
     color: colors.cloud,
@@ -608,6 +661,40 @@ const styles = StyleSheet.create({
   info: {
     color: colors.sage,
     fontSize: 12,
+  },
+  controlSection: {
+    marginBottom: 16,
+    backgroundColor: colors.pine,
+    borderRadius: 8,
+    padding: 12,
+  },
+  controlHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  controlLabel: {
+    color: colors.dew,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  controlValue: {
+    color: colors.sage,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  slider: {
+    width: "100%",
+    height: 40,
+  },
+  sliderLabels: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  sliderLabel: {
+    color: colors.stone,
+    fontSize: 10,
   },
   tempoToggle: {
     flexDirection: "row",
@@ -661,6 +748,67 @@ const styles = StyleSheet.create({
     color: colors.mint,
     fontSize: 9,
     fontWeight: "600",
+  },
+  sectionLabel: {
+    color: colors.dew,
+    fontSize: 14,
+    fontWeight: "700",
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  chopList: {
+    gap: 4,
+  },
+  chopItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.pine,
+    borderRadius: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    gap: 10,
+  },
+  chopPreviewBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.fern,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  chopPreviewBtnActive: {
+    backgroundColor: colors.recording,
+  },
+  chopPreviewIcon: {
+    color: colors.white,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  chopItemText: {
+    color: colors.dew,
+    fontSize: 14,
+    fontWeight: "600",
+    flex: 1,
+  },
+  chopItemTime: {
+    color: colors.stone,
+    fontSize: 12,
+  },
+  chopShuffleBtn: {
+    padding: 4,
+  },
+  chopShuffleText: {
+    color: colors.sage,
+    fontSize: 18,
+    fontWeight: "700",
+  },
+  chopRemoveBtn: {
+    padding: 4,
+  },
+  chopRemoveText: {
+    color: colors.recording,
+    fontSize: 16,
+    fontWeight: "700",
   },
   reshuffleBtn: {
     marginTop: 16,
