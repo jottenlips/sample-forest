@@ -12,6 +12,7 @@ import { setupAudioMode } from '../utils/permissions';
 
 interface MainScreenProps {
   onEditSample: (channelId: number) => void;
+  onChopSong: () => void;
 }
 
 function ChannelPlayerBridge({
@@ -36,7 +37,7 @@ function ChannelPlayerBridge({
   return null;
 }
 
-export function MainScreen({ onEditSample }: MainScreenProps) {
+export function MainScreen({ onEditSample, onChopSong }: MainScreenProps) {
   const channels = useAppStore((s) => s.channels);
   const addChannel = useAppStore((s) => s.addChannel);
   const triggerRef = useRef<Map<number, () => void>>(new Map());
@@ -107,9 +108,14 @@ export function MainScreen({ onEditSample }: MainScreenProps) {
           />
         ))}
 
-        <TouchableOpacity style={styles.addChannelBtn} onPress={() => addChannel()}>
-          <Text style={styles.addChannelText}>+ Add Channel</Text>
-        </TouchableOpacity>
+        <View style={styles.buttonRow}>
+          <TouchableOpacity style={styles.addChannelBtn} onPress={() => addChannel()}>
+            <Text style={styles.addChannelText}>+ Add Channel</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.chopBtn} onPress={onChopSong}>
+            <Text style={styles.chopBtnText}>Chop Song</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -126,9 +132,14 @@ const styles = StyleSheet.create({
   channelListContent: {
     paddingBottom: 20,
   },
-  addChannelBtn: {
+  buttonRow: {
+    flexDirection: 'row',
     marginHorizontal: 16,
     marginTop: 12,
+    gap: 10,
+  },
+  addChannelBtn: {
+    flex: 1,
     paddingVertical: 10,
     borderRadius: 8,
     borderWidth: 1,
@@ -138,6 +149,18 @@ const styles = StyleSheet.create({
   },
   addChannelText: {
     color: colors.fern,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  chopBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: colors.pine,
+    alignItems: 'center',
+  },
+  chopBtnText: {
+    color: colors.sage,
     fontSize: 14,
     fontWeight: '600',
   },
