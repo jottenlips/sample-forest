@@ -33,6 +33,7 @@ function createChannel(id: number, stepCount: number, label?: string): Channel {
 
 interface AppStore {
   channels: Channel[];
+  beatChannelIds: Set<number>; // channels created by beat presets
   sequencer: SequencerState;
   scenes: Scene[];
   activeSceneId: number | null;
@@ -47,6 +48,9 @@ interface AppStore {
   loadScene: (sceneId: number) => void;
   deleteScene: (sceneId: number) => void;
   updateScene: (sceneId: number) => void;
+
+  // Beat preset
+  loadBeatChannels: (channels: Channel[], bpm: number, swing: number, stepCount: number) => void;
 
   // Channel management
   addChannel: (label?: string) => void;
@@ -85,6 +89,7 @@ let nextSceneId = 1;
 
 export const useAppStore = create<AppStore>((set, get) => ({
   channels: createDefaultChannels(DEFAULT_STEP_COUNT),
+  beatChannelIds: new Set<number>(),
   sequencer: {
     bpm: 120,
     stepCount: DEFAULT_STEP_COUNT,
@@ -212,6 +217,47 @@ export const useAppStore = create<AppStore>((set, get) => ({
               }
             : s
         ),
+      };
+    }),
+
+  loadBeatChannels: (beatChannels, bpm, swing, stepCount) =>
+    set((state) => {
+      const tripletCount = getTripletStepCount(stepCount);
+      const newBeatIds = new Set(beatChannels.map((ch) => ch.id));
+
+      // Keep user channels (non-beat), resize their steps to match new stepCount
+      // On first load (no prior beat), also discard empty default channels (no sample, no active steps)
+      const isFirstLoad = state.beatChannelIds.size === 0;
+      const userChannels = state.channels
+        .filter((ch) => !state.beatChannelIds.has(ch.id))
+        .filter((ch) => !isFirstLoad || ch.sample !== null || ch.steps.some(Boolean))
+        .map((ch) => {
+          const newSteps = new Array(stepCount).fill(false);
+          ch.steps.forEach((s, i) => { if (i < stepCount) newSteps[i] = s; });
+          const newTripletSteps = new Array(tripletCount).fill(false);
+          ch.tripletSteps.forEach((s, i) => { if (i < tripletCount) newTripletSteps[i] = s; });
+          return { ...ch, steps: newSteps, tripletSteps: newTripletSteps };
+        });
+
+      // Beat channels first, then user channels
+      const allChannels = [...beatChannels, ...userChannels];
+
+      // Update nextChannelId to be above the highest id
+      const maxId = allChannels.reduce((max, ch) => Math.max(max, ch.id), nextChannelId - 1);
+      nextChannelId = maxId + 1;
+
+      return {
+        channels: allChannels,
+        beatChannelIds: newBeatIds,
+        sequencer: {
+          ...state.sequencer,
+          bpm: Math.max(40, Math.min(240, bpm)),
+          swing: Math.max(0, Math.min(100, swing)),
+          stepCount,
+          currentStep: 0,
+          currentTripletStep: 0,
+        },
+        activeSceneId: null,
       };
     }),
 

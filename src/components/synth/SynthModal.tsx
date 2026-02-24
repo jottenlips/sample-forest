@@ -10,14 +10,96 @@ import Slider from '@react-native-community/slider';
 import { Audio } from 'expo-av';
 import { colors } from '../../theme/colors';
 import { useAppStore } from '../../state/useAppStore';
-import { Waveform, NOTE_FREQUENCIES, OscillatorParams, synthesize } from '../../utils/oscillator';
-import { createSynthSample } from '../../utils/synthSample';
+import { Waveform, NOTE_FREQUENCIES, MultiOscillatorParams, OscillatorLayer, LfoParams, synthesizeMulti } from '../../utils/oscillator';
+import { createMultiSynthSample } from '../../utils/synthSample';
 
 const WAVEFORMS: { label: string; value: Waveform }[] = [
-  { label: 'Sine', value: 'sine' },
-  { label: 'Square', value: 'square' },
+  { label: 'Sin', value: 'sine' },
+  { label: 'Sqr', value: 'square' },
   { label: 'Saw', value: 'saw' },
-  { label: 'Triangle', value: 'triangle' },
+  { label: 'Tri', value: 'triangle' },
+];
+
+interface LayerState {
+  id: number;
+  waveform: Waveform;
+  freqIndex: number;
+  volume: number;
+}
+
+let nextLayerId = 1;
+
+function createLayer(waveform: Waveform = 'sine', freqIndex: number = 24, volume: number = 0.8): LayerState {
+  return { id: nextLayerId++, waveform, freqIndex, volume };
+}
+
+interface Preset {
+  label: string;
+  layers: { waveform: Waveform; freqIndex: number; volume: number }[];
+  noise: number;
+  durationMs: number;
+  attackMs: number;
+  decayMs: number;
+  masterVolume: number;
+  lfo: LfoParams | null;
+}
+
+// C2=0, E2=4, G2=7, C3=12, E3=16, A3=21, C4=24, C5=36, G#5=44, C6=48
+const PRESETS: Preset[] = [
+  {
+    label: 'Pad',
+    layers: [
+      { waveform: 'sine', freqIndex: 24, volume: 0.6 },     // C4
+      { waveform: 'sine', freqIndex: 28, volume: 0.5 },     // E4
+      { waveform: 'triangle', freqIndex: 31, volume: 0.4 }, // G4
+    ],
+    noise: 0.05,
+    durationMs: 2000,
+    attackMs: 400,
+    decayMs: 500,
+    masterVolume: 0.7,
+    lfo: null,
+  },
+  {
+    label: 'Lead',
+    layers: [
+      { waveform: 'saw', freqIndex: 24, volume: 1.0 },    // C4 main
+      { waveform: 'square', freqIndex: 24, volume: 0.3 },  // C4 body
+    ],
+    noise: 0,
+    durationMs: 500,
+    attackMs: 10,
+    decayMs: 200,
+    masterVolume: 0.8,
+    lfo: null,
+  },
+  {
+    label: 'Pluck',
+    layers: [
+      { waveform: 'triangle', freqIndex: 24, volume: 1.0 }, // C4
+      { waveform: 'saw', freqIndex: 36, volume: 0.3 },      // C5 overtone
+    ],
+    noise: 0.1,
+    durationMs: 250,
+    attackMs: 0,
+    decayMs: 220,
+    masterVolume: 0.8,
+    lfo: null,
+  },
+  {
+    label: 'Bass',
+    layers: [
+      { waveform: 'saw', freqIndex: 12, volume: 1.0 },    // C3 fundamental saw
+      { waveform: 'saw', freqIndex: 0, volume: 0.6 },     // C2 sub octave saw
+      { waveform: 'square', freqIndex: 12, volume: 0.4 }, // C3 square for thickness
+    ],
+    noise: 0,
+    durationMs: 600,
+    attackMs: 15,
+    decayMs: 350,
+    masterVolume: 0.85,
+    lfo: null,
+  },
 ];
 
 interface SynthModalProps {
@@ -28,25 +110,64 @@ interface SynthModalProps {
 export function SynthModal({ channelId, onClose }: SynthModalProps) {
   const loadSample = useAppStore((s) => s.loadSample);
 
-  const [waveform, setWaveform] = useState<Waveform>('sine');
-  const [freqIndex, setFreqIndex] = useState(24); // C4
+  const [layers, setLayers] = useState<LayerState[]>([createLayer()]);
   const [durationMs, setDurationMs] = useState(500);
   const [attackMs, setAttackMs] = useState(10);
   const [decayMs, setDecayMs] = useState(100);
-  const [volume, setVolume] = useState(0.8);
+  const [noise, setNoise] = useState(0);
+  const [lfoRate, setLfoRate] = useState(5);
+  const [lfoDepth, setLfoDepth] = useState(0);
+  const [lfoWaveform, setLfoWaveform] = useState<Waveform>('sine');
+  const [lfoTarget, setLfoTarget] = useState<'volume' | 'pitch'>('volume');
+  const [masterVolume, setMasterVolume] = useState(0.8);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const soundRef = useRef<Audio.Sound | null>(null);
 
-  const noteInfo = NOTE_FREQUENCIES[freqIndex];
-
-  const getParams = useCallback((): OscillatorParams => ({
-    waveform,
-    frequency: noteInfo.frequency,
+  const getParams = useCallback((): MultiOscillatorParams => ({
+    layers: layers.map((l): OscillatorLayer => ({
+      waveform: l.waveform,
+      frequency: NOTE_FREQUENCIES[l.freqIndex].frequency,
+      volume: l.volume,
+    })),
+    noise,
     durationMs,
     attackMs,
     decayMs,
-    volume,
-  }), [waveform, noteInfo.frequency, durationMs, attackMs, decayMs, volume]);
+    volume: masterVolume,
+    lfo: lfoDepth > 0 ? { rate: lfoRate, depth: lfoDepth, waveform: lfoWaveform, target: lfoTarget } : null,
+  }), [layers, noise, durationMs, attackMs, decayMs, masterVolume, lfoRate, lfoDepth, lfoWaveform, lfoTarget]);
+
+  const addLayer = useCallback((waveform: Waveform) => {
+    setLayers((prev) => [...prev, createLayer(waveform)]);
+  }, []);
+
+  const removeLayer = useCallback((id: number) => {
+    setLayers((prev) => prev.length > 1 ? prev.filter((l) => l.id !== id) : prev);
+  }, []);
+
+  const updateLayer = useCallback((id: number, updates: Partial<LayerState>) => {
+    setLayers((prev) => prev.map((l) => l.id === id ? { ...l, ...updates } : l));
+  }, []);
+
+  const applyPreset = useCallback((preset: Preset) => {
+    setLayers(preset.layers.map((l) => createLayer(l.waveform, l.freqIndex, l.volume)));
+    setNoise(preset.noise);
+    setDurationMs(preset.durationMs);
+    setAttackMs(preset.attackMs);
+    setDecayMs(preset.decayMs);
+    setMasterVolume(preset.masterVolume);
+    if (preset.lfo) {
+      setLfoRate(preset.lfo.rate);
+      setLfoDepth(preset.lfo.depth);
+      setLfoWaveform(preset.lfo.waveform);
+      setLfoTarget(preset.lfo.target);
+    } else {
+      setLfoRate(5);
+      setLfoDepth(0);
+      setLfoWaveform('sine');
+      setLfoTarget('volume');
+    }
+  }, []);
 
   const handlePreview = useCallback(async () => {
     if (isPreviewPlaying && soundRef.current) {
@@ -58,13 +179,13 @@ export function SynthModal({ channelId, onClose }: SynthModalProps) {
     }
 
     try {
-      const { wavBuffer } = synthesize(getParams());
+      const { wavBuffer } = synthesizeMulti(getParams());
       const blob = new Blob([wavBuffer], { type: 'audio/wav' });
       const uri = URL.createObjectURL(blob);
 
       const { sound } = await Audio.Sound.createAsync(
         { uri },
-        { shouldPlay: true, volume },
+        { shouldPlay: true, volume: masterVolume },
       );
       soundRef.current = sound;
       setIsPreviewPlaying(true);
@@ -80,15 +201,19 @@ export function SynthModal({ channelId, onClose }: SynthModalProps) {
       console.error('Synth preview failed:', err);
       setIsPreviewPlaying(false);
     }
-  }, [isPreviewPlaying, getParams, volume]);
+  }, [isPreviewPlaying, getParams, masterVolume]);
 
   const handleAdd = useCallback(async () => {
     const params = getParams();
-    const name = `${waveform} ${noteInfo.note}`;
-    const sample = await createSynthSample(params, name);
+    const layerNames = layers.map((l) => {
+      const note = NOTE_FREQUENCIES[l.freqIndex].note;
+      return `${l.waveform.slice(0, 3)} ${note}`;
+    });
+    const name = layerNames.join(' + ');
+    const sample = await createMultiSynthSample(params, name);
     loadSample(channelId, sample);
     onClose();
-  }, [getParams, waveform, noteInfo.note, channelId, loadSample, onClose]);
+  }, [getParams, layers, channelId, loadSample, onClose]);
 
   useEffect(() => {
     return () => {
@@ -102,65 +227,171 @@ export function SynthModal({ channelId, onClose }: SynthModalProps) {
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}>
         <TouchableOpacity onPress={onClose}>
-          <Text style={styles.backButton}>← Back</Text>
+          <Text style={styles.backButton}>Cancel</Text>
         </TouchableOpacity>
         <Text style={styles.title}>Synth</Text>
         <View style={{ width: 60 }} />
       </View>
 
-      {/* Waveform picker */}
+      {/* Presets */}
+      <Text style={styles.sectionTitle}>Presets</Text>
+      <View style={styles.presetRow}>
+        {PRESETS.map((p) => (
+          <TouchableOpacity
+            key={p.label}
+            style={styles.presetBtn}
+            onPress={() => applyPreset(p)}
+          >
+            <Text style={styles.presetBtnText}>{p.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* Add waveform buttons */}
+      <Text style={styles.sectionTitle}>Add Waveform</Text>
+      <View style={styles.addWaveRow}>
+        {WAVEFORMS.map((w) => (
+          <TouchableOpacity
+            key={w.value}
+            style={styles.addWaveBtn}
+            onPress={() => addLayer(w.value)}
+          >
+            <Text style={styles.addWaveBtnText}>+ {w.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* Waveform list */}
+      <Text style={styles.sectionTitle}>Waveforms ({layers.length})</Text>
+      <View style={styles.waveList}>
+        {layers.map((layer) => {
+          const noteInfo = NOTE_FREQUENCIES[layer.freqIndex];
+          return (
+            <View key={layer.id} style={styles.waveRow}>
+              <Text style={styles.waveType}>{layer.waveform}</Text>
+              <View style={styles.waveControls}>
+                <Text style={styles.waveNote}>{noteInfo.note}</Text>
+                <Slider
+                  style={styles.waveFreqSlider}
+                  minimumValue={0}
+                  maximumValue={NOTE_FREQUENCIES.length - 1}
+                  step={1}
+                  value={layer.freqIndex}
+                  onValueChange={(v) => updateLayer(layer.id, { freqIndex: v })}
+                  minimumTrackTintColor={colors.sage}
+                  maximumTrackTintColor={colors.pine}
+                  thumbTintColor={colors.mint}
+                />
+                <Text style={styles.waveVolLabel}>{Math.round(layer.volume * 100)}%</Text>
+                <Slider
+                  style={styles.waveVolSlider}
+                  minimumValue={0}
+                  maximumValue={1}
+                  step={0.05}
+                  value={layer.volume}
+                  onValueChange={(v) => updateLayer(layer.id, { volume: v })}
+                  minimumTrackTintColor={colors.sage}
+                  maximumTrackTintColor={colors.pine}
+                  thumbTintColor={colors.mint}
+                />
+              </View>
+              {layers.length > 1 && (
+                <TouchableOpacity style={styles.waveRemoveBtn} onPress={() => removeLayer(layer.id)}>
+                  <Text style={styles.waveRemoveText}>x</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          );
+        })}
+      </View>
+
+      {/* Noise */}
       <View style={styles.controlSection}>
-        <Text style={styles.controlLabel}>Waveform</Text>
-        <View style={styles.waveformRow}>
+        <View style={styles.controlHeader}>
+          <Text style={styles.controlLabel}>Noise</Text>
+          <Text style={styles.controlValue}>{Math.round(noise * 100)}%</Text>
+        </View>
+        <Slider
+          style={styles.slider}
+          minimumValue={0}
+          maximumValue={1}
+          step={0.05}
+          value={noise}
+          onValueChange={setNoise}
+          minimumTrackTintColor={colors.sage}
+          maximumTrackTintColor={colors.pine}
+          thumbTintColor={colors.mint}
+        />
+      </View>
+
+      {/* LFO */}
+      <Text style={styles.sectionTitle}>LFO</Text>
+      <View style={styles.controlSection}>
+        <View style={styles.controlHeader}>
+          <Text style={styles.controlLabel}>Target</Text>
+        </View>
+        <View style={styles.addWaveRow}>
+          {(['volume', 'pitch'] as const).map((t) => (
+            <TouchableOpacity
+              key={t}
+              style={[styles.addWaveBtn, lfoTarget === t && styles.lfoActiveBtn]}
+              onPress={() => setLfoTarget(t)}
+            >
+              <Text style={[styles.addWaveBtnText, lfoTarget === t && styles.lfoActiveBtnText]}>
+                {t === 'volume' ? 'Volume' : 'Pitch'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <View style={styles.controlHeader}>
+          <Text style={styles.controlLabel}>Shape</Text>
+        </View>
+        <View style={styles.addWaveRow}>
           {WAVEFORMS.map((w) => (
             <TouchableOpacity
               key={w.value}
-              style={[
-                styles.waveformBtn,
-                waveform === w.value && styles.waveformBtnActive,
-              ]}
-              onPress={() => setWaveform(w.value)}
+              style={[styles.addWaveBtn, lfoWaveform === w.value && styles.lfoActiveBtn]}
+              onPress={() => setLfoWaveform(w.value)}
             >
-              <Text
-                style={[
-                  styles.waveformBtnText,
-                  waveform === w.value && styles.waveformBtnTextActive,
-                ]}
-              >
+              <Text style={[styles.addWaveBtnText, lfoWaveform === w.value && styles.lfoActiveBtnText]}>
                 {w.label}
               </Text>
             </TouchableOpacity>
           ))}
         </View>
-      </View>
-
-      {/* Frequency */}
-      <View style={styles.controlSection}>
         <View style={styles.controlHeader}>
-          <Text style={styles.controlLabel}>Frequency</Text>
-          <Text style={styles.controlValue}>
-            {noteInfo.note} ({Math.round(noteInfo.frequency)} Hz)
-          </Text>
+          <Text style={styles.controlLabel}>Rate</Text>
+          <Text style={styles.controlValue}>{lfoRate.toFixed(1)} Hz</Text>
         </View>
         <Slider
           style={styles.slider}
-          minimumValue={0}
-          maximumValue={NOTE_FREQUENCIES.length - 1}
-          step={1}
-          value={freqIndex}
-          onValueChange={setFreqIndex}
+          minimumValue={0.1}
+          maximumValue={20}
+          step={0.1}
+          value={lfoRate}
+          onValueChange={setLfoRate}
           minimumTrackTintColor={colors.sage}
           maximumTrackTintColor={colors.pine}
           thumbTintColor={colors.mint}
         />
-        <View style={styles.sliderLabels}>
-          <Text style={styles.sliderLabel}>C2</Text>
-          <Text style={styles.sliderLabel}>C4</Text>
-          <Text style={styles.sliderLabel}>C6</Text>
+        <View style={styles.controlHeader}>
+          <Text style={styles.controlLabel}>Depth</Text>
+          <Text style={styles.controlValue}>{Math.round(lfoDepth * 100)}%</Text>
         </View>
+        <Slider
+          style={styles.slider}
+          minimumValue={0}
+          maximumValue={1}
+          step={0.01}
+          value={lfoDepth}
+          onValueChange={setLfoDepth}
+          minimumTrackTintColor={colors.sage}
+          maximumTrackTintColor={colors.pine}
+          thumbTintColor={colors.mint}
+        />
       </View>
 
-      {/* Duration */}
+      {/* Shared envelope + master */}
       <View style={styles.controlSection}>
         <View style={styles.controlHeader}>
           <Text style={styles.controlLabel}>Duration</Text>
@@ -184,7 +415,6 @@ export function SynthModal({ channelId, onClose }: SynthModalProps) {
         </View>
       </View>
 
-      {/* Attack */}
       <View style={styles.controlSection}>
         <View style={styles.controlHeader}>
           <Text style={styles.controlLabel}>Attack</Text>
@@ -203,7 +433,6 @@ export function SynthModal({ channelId, onClose }: SynthModalProps) {
         />
       </View>
 
-      {/* Decay */}
       <View style={styles.controlSection}>
         <View style={styles.controlHeader}>
           <Text style={styles.controlLabel}>Decay</Text>
@@ -222,19 +451,18 @@ export function SynthModal({ channelId, onClose }: SynthModalProps) {
         />
       </View>
 
-      {/* Volume */}
       <View style={styles.controlSection}>
         <View style={styles.controlHeader}>
-          <Text style={styles.controlLabel}>Volume</Text>
-          <Text style={styles.controlValue}>{Math.round(volume * 100)}%</Text>
+          <Text style={styles.controlLabel}>Master Volume</Text>
+          <Text style={styles.controlValue}>{Math.round(masterVolume * 100)}%</Text>
         </View>
         <Slider
           style={styles.slider}
           minimumValue={0}
           maximumValue={1}
           step={0.05}
-          value={volume}
-          onValueChange={setVolume}
+          value={masterVolume}
+          onValueChange={setMasterVolume}
           minimumTrackTintColor={colors.sage}
           maximumTrackTintColor={colors.pine}
           thumbTintColor={colors.mint}
@@ -247,7 +475,7 @@ export function SynthModal({ channelId, onClose }: SynthModalProps) {
         onPress={handlePreview}
       >
         <Text style={styles.previewButtonText}>
-          {isPreviewPlaying ? '■ Stop Preview' : '▶ Preview'}
+          {isPreviewPlaying ? 'Stop Preview' : 'Preview'}
         </Text>
       </TouchableOpacity>
 
@@ -272,7 +500,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 20,
+    marginBottom: 16,
   },
   backButton: {
     color: colors.sage,
@@ -287,8 +515,108 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginHorizontal: 8,
   },
+  sectionTitle: {
+    color: colors.dew,
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 8,
+    marginTop: 4,
+  },
+  presetRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  presetBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 6,
+    backgroundColor: colors.pine,
+    alignItems: 'center',
+  },
+  presetBtnText: {
+    color: colors.mint,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  addWaveRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  addWaveBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: colors.fern,
+    borderStyle: 'dashed',
+    alignItems: 'center',
+  },
+  addWaveBtnText: {
+    color: colors.fern,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  lfoActiveBtn: {
+    backgroundColor: colors.fern,
+    borderColor: colors.fern,
+    borderStyle: 'solid',
+  },
+  lfoActiveBtnText: {
+    color: colors.white,
+  },
+  waveList: {
+    gap: 6,
+    marginBottom: 16,
+  },
+  waveRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.pine,
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    gap: 8,
+  },
+  waveType: {
+    color: colors.mint,
+    fontSize: 13,
+    fontWeight: '700',
+    width: 52,
+  },
+  waveControls: {
+    flex: 1,
+    gap: 2,
+  },
+  waveNote: {
+    color: colors.sage,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  waveFreqSlider: {
+    width: '100%',
+    height: 28,
+  },
+  waveVolLabel: {
+    color: colors.stone,
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  waveVolSlider: {
+    width: '100%',
+    height: 28,
+  },
+  waveRemoveBtn: {
+    padding: 6,
+  },
+  waveRemoveText: {
+    color: colors.recording,
+    fontSize: 16,
+    fontWeight: '700',
+  },
   controlSection: {
-    marginBottom: 20,
+    marginBottom: 16,
     backgroundColor: colors.pine,
     borderRadius: 8,
     padding: 12,
@@ -320,29 +648,6 @@ const styles = StyleSheet.create({
   sliderLabel: {
     color: colors.stone,
     fontSize: 10,
-  },
-  waveformRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 8,
-  },
-  waveformBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 6,
-    backgroundColor: colors.forest,
-    alignItems: 'center',
-  },
-  waveformBtnActive: {
-    backgroundColor: colors.sage,
-  },
-  waveformBtnText: {
-    color: colors.mint,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  waveformBtnTextActive: {
-    color: colors.forest,
   },
   previewButton: {
     backgroundColor: colors.sage,

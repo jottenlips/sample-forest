@@ -9,6 +9,7 @@ import { ChannelRow } from '../components/channels/ChannelRow';
 import { useSequencer } from '../hooks/useSequencer';
 import { useChannelPlayer } from '../hooks/useChannelPlayer';
 import { setupAudioMode } from '../utils/permissions';
+import { BeatPresetBar } from '../components/BeatPresetBar';
 
 interface MainScreenProps {
   onEditSample: (channelId: number) => void;
@@ -111,6 +112,8 @@ export function MainScreen({ onEditSample, onOpenSynth, onChopSong, onExport }: 
       </View>
 
       <ScrollView style={styles.channelList} contentContainerStyle={styles.channelListContent}>
+        <BeatPresetBar />
+
         {channels.map((ch) => (
           <ChannelRow
             key={ch.id}

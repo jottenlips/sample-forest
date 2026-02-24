@@ -14,6 +14,29 @@ export interface OscillatorParams {
   volume: number; // 0–1
 }
 
+export interface OscillatorLayer {
+  waveform: Waveform;
+  frequency: number;
+  volume: number; // 0–1 per-layer volume
+}
+
+export interface LfoParams {
+  rate: number;       // Hz (0.1–20)
+  depth: number;      // 0–1
+  waveform: Waveform; // reuse existing sine/square/saw/triangle
+  target: 'volume' | 'pitch';
+}
+
+export interface MultiOscillatorParams {
+  layers: OscillatorLayer[];
+  noise: number; // 0–1 white noise level
+  durationMs: number;
+  attackMs: number;
+  decayMs: number;
+  volume: number; // 0–1 master volume
+  lfo: LfoParams | null;
+}
+
 export interface NoteFrequency {
   note: string;
   frequency: number;
@@ -78,6 +101,79 @@ export function generateOscillator(params: OscillatorParams): Float32Array {
     }
 
     samples[i] = value * envelope * volume;
+  }
+
+  return samples;
+}
+
+/**
+ * Generate raw PCM samples for multiple oscillator layers mixed together with AD envelope.
+ */
+function computeWaveform(waveform: Waveform, phase: number): number {
+  switch (waveform) {
+    case 'sine':
+      return Math.sin(2 * Math.PI * phase);
+    case 'square':
+      return phase < 0.5 ? 1 : -1;
+    case 'saw':
+      return 2 * phase - 1;
+    case 'triangle':
+      return phase < 0.5 ? 4 * phase - 1 : 3 - 4 * phase;
+  }
+}
+
+export function generateMultiOscillator(params: MultiOscillatorParams): Float32Array {
+  const { layers, noise, durationMs, attackMs, decayMs, volume, lfo } = params;
+  const numSamples = Math.floor((durationMs / 1000) * SAMPLE_RATE);
+  const samples = new Float32Array(numSamples);
+
+  const attackSamples = Math.floor((attackMs / 1000) * SAMPLE_RATE);
+  const decaySamples = Math.floor((decayMs / 1000) * SAMPLE_RATE);
+  const decayStart = numSamples - decaySamples;
+
+  // Count sources for normalization (layers + noise if present)
+  const sourceCount = layers.length + (noise > 0 ? 1 : 0);
+  const norm = sourceCount > 0 ? sourceCount : 1;
+
+  for (let i = 0; i < numSamples; i++) {
+    const t = i / SAMPLE_RATE;
+
+    // Compute LFO value (-1 to 1)
+    let lfoVal = 0;
+    if (lfo) {
+      const lfoPhase = (lfo.rate * t) % 1;
+      lfoVal = computeWaveform(lfo.waveform, lfoPhase);
+    }
+
+    let mixed = 0;
+    for (const layer of layers) {
+      // For pitch target, modulate frequency; otherwise use base frequency
+      const freq = lfo && lfo.target === 'pitch'
+        ? layer.frequency * (1 + lfoVal * lfo.depth * 0.1)
+        : layer.frequency;
+      const phase = (freq * t) % 1;
+      mixed += computeWaveform(layer.waveform, phase) * layer.volume;
+    }
+
+    // White noise
+    if (noise > 0) {
+      mixed += (Math.random() * 2 - 1) * noise;
+    }
+
+    // LFO volume modulation (tremolo)
+    if (lfo && lfo.target === 'volume') {
+      mixed *= 1 - lfo.depth + lfo.depth * (lfoVal * 0.5 + 0.5);
+    }
+
+    // AD envelope
+    let envelope = 1;
+    if (i < attackSamples && attackSamples > 0) {
+      envelope = i / attackSamples;
+    } else if (i >= decayStart && decaySamples > 0) {
+      envelope = (numSamples - i) / decaySamples;
+    }
+
+    samples[i] = (mixed / norm) * envelope * volume;
   }
 
   return samples;
@@ -156,6 +252,34 @@ export function synthesize(params: OscillatorParams): {
       if (abs > maxAbs) maxAbs = abs;
     }
     waveformData.push(Math.max(0.05, maxAbs)); // minimum visible height
+  }
+
+  return { wavBuffer, durationMs: params.durationMs, waveformData };
+}
+
+/**
+ * Synthesize multiple oscillator layers: generate PCM, encode WAV, downsample for display.
+ */
+export function synthesizeMulti(params: MultiOscillatorParams): {
+  wavBuffer: ArrayBuffer;
+  durationMs: number;
+  waveformData: number[];
+} {
+  const samples = generateMultiOscillator(params);
+  const wavBuffer = encodeWavFromSamples(samples);
+
+  const waveformPoints = 50;
+  const waveformData: number[] = [];
+  const chunkSize = Math.max(1, Math.floor(samples.length / waveformPoints));
+  for (let i = 0; i < waveformPoints; i++) {
+    const start = i * chunkSize;
+    const end = Math.min(start + chunkSize, samples.length);
+    let maxAbs = 0;
+    for (let j = start; j < end; j++) {
+      const abs = Math.abs(samples[j]);
+      if (abs > maxAbs) maxAbs = abs;
+    }
+    waveformData.push(Math.max(0.05, maxAbs));
   }
 
   return { wavBuffer, durationMs: params.durationMs, waveformData };
