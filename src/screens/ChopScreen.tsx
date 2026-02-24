@@ -48,6 +48,7 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
   const [bpm, setBpm] = useState<number | null>(null);
   const [chopLen, setChopLen] = useState(0.5); // seconds per chop
   const [chopStarts, setChopStarts] = useState<number[]>([]); // start times in seconds
+  const [chopLengths, setChopLengths] = useState<Map<number, number>>(new Map()); // per-chop length overrides (index -> seconds)
   const [matchTempo, setMatchTempo] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
@@ -129,6 +130,7 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
   const handleReshuffle = useCallback(() => {
     if (!audioBuffer) return;
     setChopStarts(pickRandomStarts(audioBuffer.duration, chopLen, NUM_CHOPS));
+    setChopLengths(new Map());
   }, [audioBuffer, chopLen]);
 
   const stopPreview = useCallback(async () => {
@@ -156,9 +158,10 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
       try {
         const sampleRate = audioBuffer.sampleRate;
         const startSec = chopStarts[idx];
+        const thisChopLen = chopLengths.get(idx) ?? chopLen;
         const sliceStart = Math.floor(startSec * sampleRate);
         const sliceEnd = Math.min(
-          sliceStart + Math.floor(chopLen * sampleRate),
+          sliceStart + Math.floor(thisChopLen * sampleRate),
           audioBuffer.length,
         );
 
@@ -184,7 +187,7 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
         setPreviewingIdx(null);
       }
     },
-    [audioBuffer, chopLen, chopStarts, previewingIdx, stopPreview],
+    [audioBuffer, chopLen, chopLengths, chopStarts, previewingIdx, stopPreview],
   );
 
   // Cleanup on unmount
@@ -203,16 +206,18 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
 
     try {
       const sampleRate = audioBuffer.sampleRate;
-      const effectiveBpm = 60 / chopLen;
-      const rate = matchTempo ? sequencerBpm / effectiveBpm : 1.0;
 
       for (let i = 0; i < chopStarts.length; i++) {
         const startSec = chopStarts[i];
+        const thisChopLen = chopLengths.get(i) ?? chopLen;
         const sliceStart = Math.floor(startSec * sampleRate);
         const sliceEnd = Math.min(
-          sliceStart + Math.floor(chopLen * sampleRate),
+          sliceStart + Math.floor(thisChopLen * sampleRate),
           audioBuffer.length,
         );
+
+        const effectiveBpm = 60 / thisChopLen;
+        const rate = matchTempo ? sequencerBpm / effectiveBpm : 1.0;
 
         const wavBlob = encodeWav(audioBuffer, sliceStart, sliceEnd);
         const blobUrl = URL.createObjectURL(wavBlob);
@@ -265,6 +270,7 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
   }, [
     audioBuffer,
     chopLen,
+    chopLengths,
     chopStarts,
     fileName,
     matchTempo,
@@ -275,9 +281,58 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
     stopPreview,
   ]);
 
+  // Get effective length for a chop (custom or default)
+  const getChopLength = useCallback(
+    (idx: number) => chopLengths.get(idx) ?? chopLen,
+    [chopLengths, chopLen],
+  );
+
+  // Adjust an individual chop's length
+  const adjustChopLength = useCallback(
+    (idx: number, delta: number) => {
+      setChopLengths((prev) => {
+        const next = new Map(prev);
+        const current = next.get(idx) ?? chopLen;
+        const newLen = Math.max(0.05, Math.round((current + delta) * 1000) / 1000);
+        if (!audioBuffer) {
+          next.set(idx, newLen);
+          return next;
+        }
+        // Clamp so chop doesn't exceed audio duration
+        const maxLen = audioBuffer.duration - chopStarts[idx];
+        next.set(idx, Math.min(newLen, maxLen));
+        return next;
+      });
+    },
+    [chopLen, audioBuffer, chopStarts],
+  );
+
+  // Reset a chop's length back to the default
+  const resetChopLength = useCallback(
+    (idx: number) => {
+      setChopLengths((prev) => {
+        const next = new Map(prev);
+        next.delete(idx);
+        return next;
+      });
+    },
+    [],
+  );
+
   // Remove a chop by index
   const removeChop = useCallback((idx: number) => {
     setChopStarts((prev) => prev.filter((_, i) => i !== idx));
+    setChopLengths((prev) => {
+      const next = new Map<number, number>();
+      // Re-index remaining chops
+      let newIdx = 0;
+      for (let i = 0; i < prev.size + 1; i++) {
+        if (i === idx) continue;
+        if (prev.has(i)) next.set(newIdx, prev.get(i)!);
+        newIdx++;
+      }
+      return next;
+    });
   }, []);
 
   // Reshuffle a single chop to a new random position
@@ -302,9 +357,11 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
     let highlighted = false;
 
     if (audioBuffer && chopLen > 0) {
-      for (const startSec of chopStarts) {
+      for (let ci = 0; ci < chopStarts.length; ci++) {
+        const startSec = chopStarts[ci];
+        const len = chopLengths.get(ci) ?? chopLen;
         const chopStart = startSec / audioBuffer.duration;
-        const chopEnd = (startSec + chopLen) / audioBuffer.duration;
+        const chopEnd = (startSec + len) / audioBuffer.duration;
         if (percent >= chopStart && percent < chopEnd) {
           highlighted = true;
           break;
@@ -475,8 +532,9 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
           <View style={[styles.beatLabels, { width: waveformWidth }]}>
             {audioBuffer &&
               chopStarts.map((startSec, idx) => {
+                const len = chopLengths.get(idx) ?? chopLen;
                 const centerX =
-                  ((startSec + chopLen / 2) / audioBuffer.duration) *
+                  ((startSec + len / 2) / audioBuffer.duration) *
                   waveformWidth;
                 return (
                   <Text
@@ -494,6 +552,8 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
           <View style={styles.chopList}>
             {chopStarts.map((startSec, idx) => {
               const isPreviewing = previewingIdx === idx;
+              const thisLen = getChopLength(idx);
+              const hasCustomLen = chopLengths.has(idx);
               return (
                 <View key={idx} style={styles.chopItem}>
                   <TouchableOpacity
@@ -507,12 +567,33 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
                       {isPreviewing ? "■" : "▶"}
                     </Text>
                   </TouchableOpacity>
-                  <Text style={styles.chopItemText}>
-                    Chop {idx + 1}
-                  </Text>
-                  <Text style={styles.chopItemTime}>
-                    {startSec.toFixed(2)}s
-                  </Text>
+                  <View style={styles.chopItemInfo}>
+                    <Text style={styles.chopItemText}>
+                      Chop {idx + 1}
+                    </Text>
+                    <Text style={styles.chopItemTime}>
+                      {startSec.toFixed(2)}s
+                    </Text>
+                  </View>
+                  <View style={styles.chopLenControls}>
+                    <TouchableOpacity
+                      style={styles.chopLenBtn}
+                      onPress={() => adjustChopLength(idx, -chopLen * 0.25)}
+                    >
+                      <Text style={styles.chopLenBtnText}>-</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => hasCustomLen && resetChopLength(idx)}>
+                      <Text style={[styles.chopLenValue, hasCustomLen && styles.chopLenCustom]}>
+                        {thisLen.toFixed(3)}s
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.chopLenBtn}
+                      onPress={() => adjustChopLength(idx, chopLen * 0.25)}
+                    >
+                      <Text style={styles.chopLenBtnText}>+</Text>
+                    </TouchableOpacity>
+                  </View>
                   <TouchableOpacity
                     style={styles.chopShuffleBtn}
                     onPress={() => reshuffleSingleChop(idx)}
@@ -784,15 +865,47 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "700",
   },
+  chopItemInfo: {
+    flex: 1,
+  },
   chopItemText: {
     color: colors.dew,
     fontSize: 14,
     fontWeight: "600",
-    flex: 1,
   },
   chopItemTime: {
     color: colors.stone,
-    fontSize: 12,
+    fontSize: 11,
+  },
+  chopLenControls: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  chopLenBtn: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: colors.fern,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  chopLenBtnText: {
+    color: colors.white,
+    fontSize: 16,
+    fontWeight: "700",
+    lineHeight: 18,
+  },
+  chopLenValue: {
+    color: colors.sage,
+    fontSize: 11,
+    fontWeight: "600",
+    minWidth: 44,
+    textAlign: "center",
+  },
+  chopLenCustom: {
+    color: colors.mint,
+    fontWeight: "700",
   },
   chopShuffleBtn: {
     padding: 4,
