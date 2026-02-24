@@ -5,127 +5,35 @@ import { getTripletStepCount } from '../types';
 type TriggerCallback = (channelId: number) => void;
 
 export function useSequencer(triggerCallbacks: Map<number, TriggerCallback>) {
-  const { sequencer, channels, advanceStep, setCurrentStep, setPlaying } = useAppStore();
+  // Only subscribe to the values that should trigger re-renders
+  const isPlaying = useAppStore((s) => s.sequencer.isPlaying);
+  const bpm = useAppStore((s) => s.sequencer.bpm);
+  const setPlaying = useAppStore((s) => s.setPlaying);
+  const setCurrentStep = useAppStore((s) => s.setCurrentStep);
   const setCurrentTripletStep = useAppStore((s) => s.setCurrentTripletStep);
+
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const nextStepTimeRef = useRef<number>(0);
   const currentStepRef = useRef<number>(0);
-  // Triplet scheduling runs on its own timeline
   const nextTripletTimeRef = useRef<number>(0);
   const currentTripletStepRef = useRef<number>(0);
+
+  // Store refs for latest values to avoid stale closures without re-renders
+  const triggerCallbacksRef = useRef(triggerCallbacks);
+  triggerCallbacksRef.current = triggerCallbacks;
 
   const LOOKAHEAD_MS = 100;
   const TICK_MS = 25;
 
-  const getStepDurationMs = useCallback(() => {
-    return (60000 / sequencer.bpm) / 4;
-  }, [sequencer.bpm]);
-
-  // Triplet duration: 3 triplet steps span the same time as 2 normal steps
-  // So triplet step duration = (2/3) * normal step duration
-  const getTripletStepDurationMs = useCallback(() => {
-    return ((60000 / sequencer.bpm) / 4) * (2 / 3);
-  }, [sequencer.bpm]);
-
-  const scheduleStep = useCallback(
-    (stepIndex: number, delay: number) => {
-      const state = useAppStore.getState();
-      const hasSolo = state.channels.some((ch) => ch.solo);
-      const punchIn = state.punchIn;
-
-      // Build a channel-id-to-sample mapping for swap effect
-      let swapMap: Map<number, number> | null = null;
-      if (punchIn === 'swap' && state.channels.length > 1) {
-        const channelIds = state.channels.map((c) => c.id);
-        swapMap = new Map();
-        for (let i = 0; i < channelIds.length; i++) {
-          const sourceIdx = (i + 1) % channelIds.length;
-          swapMap.set(channelIds[i], channelIds[sourceIdx]);
-        }
-      }
-
-      setTimeout(() => {
-        setCurrentStep(stepIndex);
-
-        state.channels.forEach((channel) => {
-          if (!channel.steps[stepIndex]) return;
-          if (channel.muted) return;
-          if (hasSolo && !channel.solo) return;
-
-          if (punchIn === 'swap' && swapMap) {
-            const swappedId = swapMap.get(channel.id);
-            if (swappedId !== undefined) {
-              const swappedChannel = state.channels.find((c) => c.id === swappedId);
-              if (swappedChannel?.sample) {
-                const callback = triggerCallbacks.get(swappedId);
-                if (callback) callback(swappedId);
-              }
-            }
-          } else {
-            if (!channel.sample) return;
-            const callback = triggerCallbacks.get(channel.id);
-            if (callback) callback(channel.id);
-          }
-        });
-      }, Math.max(0, delay));
-    },
-    [triggerCallbacks, setCurrentStep],
-  );
-
-  const scheduleTripletStep = useCallback(
-    (stepIndex: number, delay: number) => {
-      const state = useAppStore.getState();
-      const hasSolo = state.channels.some((ch) => ch.solo);
-      const punchIn = state.punchIn;
-
-      // Build swap map for triplet steps too
-      let swapMap: Map<number, number> | null = null;
-      if (punchIn === 'swap' && state.channels.length > 1) {
-        const channelIds = state.channels.map((c) => c.id);
-        swapMap = new Map();
-        for (let i = 0; i < channelIds.length; i++) {
-          const sourceIdx = (i + 1) % channelIds.length;
-          swapMap.set(channelIds[i], channelIds[sourceIdx]);
-        }
-      }
-
-      setTimeout(() => {
-        setCurrentTripletStep(stepIndex);
-
-        state.channels.forEach((channel) => {
-          if (!channel.tripletSteps[stepIndex]) return;
-          if (channel.muted) return;
-          if (hasSolo && !channel.solo) return;
-
-          if (punchIn === 'swap' && swapMap) {
-            const swappedId = swapMap.get(channel.id);
-            if (swappedId !== undefined) {
-              const swappedChannel = state.channels.find((c) => c.id === swappedId);
-              if (swappedChannel?.sample) {
-                const callback = triggerCallbacks.get(swappedId);
-                if (callback) callback(swappedId);
-              }
-            }
-          } else {
-            if (!channel.sample) return;
-            const callback = triggerCallbacks.get(channel.id);
-            if (callback) callback(channel.id);
-          }
-        });
-      }, Math.max(0, delay));
-    },
-    [triggerCallbacks, setCurrentTripletStep],
-  );
-
   const schedulerTick = useCallback(() => {
     const now = Date.now();
-    const baseStepDuration = getStepDurationMs();
-    const baseTripletDuration = getTripletStepDurationMs();
     const state = useAppStore.getState();
-    const punchIn = state.punchIn;
-    const tripletCount = getTripletStepCount(state.sequencer.stepCount);
+    const { sequencer, channels, punchIn, repeatBeatOrigin } = state;
 
-    // Apply tempo effects
+    const baseStepDuration = (60000 / sequencer.bpm) / 4;
+    const baseTripletDuration = baseStepDuration * (2 / 3);
+    const tripletCount = getTripletStepCount(sequencer.stepCount);
+
     let stepDuration = baseStepDuration;
     let tripletDuration = baseTripletDuration;
     if (punchIn === 'double') {
@@ -136,48 +44,105 @@ export function useSequencer(triggerCallbacks: Map<number, TriggerCallback>) {
       tripletDuration = baseTripletDuration * 2;
     }
 
-    const swingAmount = (state.sequencer.swing / 100) * 0.75;
+    const swingAmount = (sequencer.swing / 100) * 0.75;
+    const hasSolo = channels.some((ch) => ch.solo);
+    const callbacks = triggerCallbacksRef.current;
+
+    // Build swap map once per tick if needed
+    let swapMap: Map<number, number> | null = null;
+    if (punchIn === 'swap' && channels.length > 1) {
+      const channelIds = channels.map((c) => c.id);
+      swapMap = new Map();
+      for (let i = 0; i < channelIds.length; i++) {
+        swapMap.set(channelIds[i], channelIds[(i + 1) % channelIds.length]);
+      }
+    }
 
     // Schedule normal steps
     while (nextStepTimeRef.current < now + LOOKAHEAD_MS) {
       let step = currentStepRef.current;
 
-      if (punchIn === 'repeat' && state.repeatBeatOrigin !== null) {
-        const beatOrigin = state.repeatBeatOrigin;
+      if (punchIn === 'repeat' && repeatBeatOrigin !== null) {
         const beatLength = 4;
-        step = beatOrigin + ((step - beatOrigin) % beatLength + beatLength) % beatLength;
+        step = repeatBeatOrigin + ((step - repeatBeatOrigin) % beatLength + beatLength) % beatLength;
       }
 
       const isOffbeat = step % 2 === 1;
       const swingDelayMs = isOffbeat ? swingAmount * stepDuration : 0;
       const delay = nextStepTimeRef.current - now + swingDelayMs;
-      scheduleStep(step, delay);
+
+      const capturedStep = step;
+      setTimeout(() => {
+        setCurrentStep(capturedStep);
+
+        channels.forEach((channel) => {
+          if (!channel.steps[capturedStep]) return;
+          if (channel.muted) return;
+          if (hasSolo && !channel.solo) return;
+
+          if (punchIn === 'swap' && swapMap) {
+            const swappedId = swapMap.get(channel.id);
+            if (swappedId !== undefined) {
+              const swappedChannel = channels.find((c) => c.id === swappedId);
+              if (swappedChannel?.sample) {
+                const callback = callbacks.get(swappedId);
+                if (callback) callback(swappedId);
+              }
+            }
+          } else {
+            if (!channel.sample) return;
+            const callback = callbacks.get(channel.id);
+            if (callback) callback(channel.id);
+          }
+        });
+      }, Math.max(0, delay));
 
       nextStepTimeRef.current += stepDuration;
-      currentStepRef.current =
-        (currentStepRef.current + 1) % state.sequencer.stepCount;
+      currentStepRef.current = (currentStepRef.current + 1) % sequencer.stepCount;
     }
 
-    // Schedule triplet steps (independent timeline)
+    // Schedule triplet steps
     while (nextTripletTimeRef.current < now + LOOKAHEAD_MS) {
       let tripletStep = currentTripletStepRef.current;
 
-      // Apply repeat effect: loop within the 3-triplet-step beat
-      if (punchIn === 'repeat' && state.repeatBeatOrigin !== null) {
-        // Convert beat origin (in normal steps) to triplet steps: every 4 normal steps = 6 triplet steps
-        const tripletBeatOrigin = Math.floor(state.repeatBeatOrigin / 4) * 6;
-        const tripletBeatLength = 6; // 6 triplet steps per beat
+      if (punchIn === 'repeat' && repeatBeatOrigin !== null) {
+        const tripletBeatOrigin = Math.floor(repeatBeatOrigin / 4) * 6;
+        const tripletBeatLength = 6;
         tripletStep = tripletBeatOrigin + ((tripletStep - tripletBeatOrigin) % tripletBeatLength + tripletBeatLength) % tripletBeatLength;
       }
 
       const delay = nextTripletTimeRef.current - now;
-      scheduleTripletStep(tripletStep, delay);
+      const capturedTripletStep = tripletStep;
+
+      setTimeout(() => {
+        setCurrentTripletStep(capturedTripletStep);
+
+        channels.forEach((channel) => {
+          if (!channel.tripletSteps[capturedTripletStep]) return;
+          if (channel.muted) return;
+          if (hasSolo && !channel.solo) return;
+
+          if (punchIn === 'swap' && swapMap) {
+            const swappedId = swapMap.get(channel.id);
+            if (swappedId !== undefined) {
+              const swappedChannel = channels.find((c) => c.id === swappedId);
+              if (swappedChannel?.sample) {
+                const callback = callbacks.get(swappedId);
+                if (callback) callback(swappedId);
+              }
+            }
+          } else {
+            if (!channel.sample) return;
+            const callback = callbacks.get(channel.id);
+            if (callback) callback(channel.id);
+          }
+        });
+      }, Math.max(0, delay));
 
       nextTripletTimeRef.current += tripletDuration;
-      currentTripletStepRef.current =
-        (currentTripletStepRef.current + 1) % tripletCount;
+      currentTripletStepRef.current = (currentTripletStepRef.current + 1) % tripletCount;
     }
-  }, [getStepDurationMs, getTripletStepDurationMs, scheduleStep, scheduleTripletStep]);
+  }, [setCurrentStep, setCurrentTripletStep]);
 
   const start = useCallback(() => {
     if (intervalRef.current) return;
@@ -214,13 +179,13 @@ export function useSequencer(triggerCallbacks: Map<number, TriggerCallback>) {
 
   // Restart scheduler when BPM or punch-in changes during playback
   useEffect(() => {
-    if (sequencer.isPlaying && intervalRef.current) {
+    if (isPlaying && intervalRef.current) {
       clearInterval(intervalRef.current);
       nextStepTimeRef.current = Date.now();
       nextTripletTimeRef.current = Date.now();
       intervalRef.current = setInterval(schedulerTick, TICK_MS);
     }
-  }, [sequencer.bpm, schedulerTick, sequencer.isPlaying]);
+  }, [bpm, schedulerTick, isPlaying]);
 
-  return { start, stop, isPlaying: sequencer.isPlaying };
+  return { start, stop, isPlaying };
 }

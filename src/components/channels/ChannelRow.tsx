@@ -58,8 +58,12 @@ export function ChannelRow({
   const channel = useAppStore((s) =>
     s.channels.find((c) => c.id === channelId),
   );
-  const { loadSample, removeSample, removeChannel, duplicateChannel, toggleMute, toggleSolo } =
-    useAppStore();
+  const loadSample = useAppStore((s) => s.loadSample);
+  const removeSample = useAppStore((s) => s.removeSample);
+  const removeChannel = useAppStore((s) => s.removeChannel);
+  const duplicateChannel = useAppStore((s) => s.duplicateChannel);
+  const toggleMute = useAppStore((s) => s.toggleMute);
+  const toggleSolo = useAppStore((s) => s.toggleSolo);
 
   if (!channel) return null;
   const { isRecording, startRecording, stopRecording } = useRecorder();

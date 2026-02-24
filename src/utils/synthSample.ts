@@ -25,14 +25,8 @@ export async function createMultiSynthSample(
     }
     const fileName = `synth_${Date.now()}.wav`;
     const destFile = new File(samplesDir, fileName);
-    const bytes = new Uint8Array(wavBuffer);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    const base64 = btoa(binary);
     destFile.create();
-    destFile.write(base64, { encoding: 'base64' });
+    destFile.write(new Uint8Array(wavBuffer));
     uri = destFile.uri;
   }
 
@@ -69,15 +63,8 @@ export async function createSynthSample(
     }
     const fileName = `synth_${Date.now()}.wav`;
     const destFile = new File(samplesDir, fileName);
-    // Write the ArrayBuffer as base64
-    const bytes = new Uint8Array(wavBuffer);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    const base64 = btoa(binary);
     destFile.create();
-    destFile.write(base64, { encoding: 'base64' });
+    destFile.write(new Uint8Array(wavBuffer));
     uri = destFile.uri;
   }
 
