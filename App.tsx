@@ -5,6 +5,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { MainScreen } from './src/screens/MainScreen';
 import { SampleEditScreen } from './src/screens/SampleEditScreen';
 import { ChopScreen } from './src/screens/ChopScreen';
+import { ExportScreen } from './src/screens/ExportScreen';
 import { SynthModal } from './src/components/synth/SynthModal';
 import { colors } from './src/theme/colors';
 
@@ -12,6 +13,7 @@ export default function App() {
   const [editingChannel, setEditingChannel] = useState<number | null>(null);
   const [synthChannel, setSynthChannel] = useState<number | null>(null);
   const [showChop, setShowChop] = useState(false);
+  const [showExport, setShowExport] = useState(false);
 
   return (
     <GestureHandlerRootView style={styles.root}>
@@ -20,6 +22,7 @@ export default function App() {
           onEditSample={(channelId) => setEditingChannel(channelId)}
           onOpenSynth={(channelId) => setSynthChannel(channelId)}
           onChopSong={() => setShowChop(true)}
+          onExport={() => setShowExport(true)}
         />
 
         <Modal
@@ -57,6 +60,15 @@ export default function App() {
           onRequestClose={() => setShowChop(false)}
         >
           <ChopScreen onClose={() => setShowChop(false)} />
+        </Modal>
+
+        <Modal
+          visible={showExport}
+          animationType="slide"
+          presentationStyle="pageSheet"
+          onRequestClose={() => setShowExport(false)}
+        >
+          <ExportScreen onClose={() => setShowExport(false)} />
         </Modal>
       </SafeAreaProvider>
     </GestureHandlerRootView>

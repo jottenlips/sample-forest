@@ -14,6 +14,7 @@ interface MainScreenProps {
   onEditSample: (channelId: number) => void;
   onOpenSynth: (channelId: number) => void;
   onChopSong: () => void;
+  onExport: () => void;
 }
 
 function ChannelPlayerBridge({
@@ -38,7 +39,7 @@ function ChannelPlayerBridge({
   return null;
 }
 
-export function MainScreen({ onEditSample, onOpenSynth, onChopSong }: MainScreenProps) {
+export function MainScreen({ onEditSample, onOpenSynth, onChopSong, onExport }: MainScreenProps) {
   const channels = useAppStore((s) => s.channels);
   const addChannel = useAppStore((s) => s.addChannel);
   const triggerRef = useRef<Map<number, () => void>>(new Map());
@@ -104,6 +105,9 @@ export function MainScreen({ onEditSample, onOpenSynth, onChopSong }: MainScreen
         <TouchableOpacity style={styles.chopBtn} onPress={onChopSong}>
           <Text style={styles.chopBtnText}>Auto Chop Song</Text>
         </TouchableOpacity>
+        <TouchableOpacity style={styles.exportBtn} onPress={onExport}>
+          <Text style={styles.exportBtnText}>Export</Text>
+        </TouchableOpacity>
       </View>
 
       <ScrollView style={styles.channelList} contentContainerStyle={styles.channelListContent}>
@@ -166,5 +170,17 @@ const styles = StyleSheet.create({
     color: colors.sage,
     fontSize: 14,
     fontWeight: '600',
+  },
+  exportBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: colors.sage,
+    alignItems: 'center',
+  },
+  exportBtnText: {
+    color: colors.forest,
+    fontSize: 14,
+    fontWeight: '700',
   },
 });
