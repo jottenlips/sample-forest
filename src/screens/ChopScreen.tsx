@@ -335,6 +335,24 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
     });
   }, []);
 
+  // Nudge a chop's start position left or right
+  const nudgeChop = useCallback(
+    (idx: number, direction: -1 | 1) => {
+      if (!audioBuffer) return;
+      const thisLen = chopLengths.get(idx) ?? chopLen;
+      // Nudge by 10% of chop length per tap
+      const nudgeAmount = thisLen * 0.1;
+      setChopStarts((prev) => {
+        const updated = [...prev];
+        const newStart = Math.round((updated[idx] + direction * nudgeAmount) * 1000) / 1000;
+        // Clamp within [0, duration - thisLen]
+        updated[idx] = Math.max(0, Math.min(newStart, audioBuffer.duration - thisLen));
+        return updated;
+      });
+    },
+    [audioBuffer, chopLen, chopLengths],
+  );
+
   // Reshuffle a single chop to a new random position
   const reshuffleSingleChop = useCallback(
     (idx: number) => {
@@ -574,6 +592,20 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
                     <Text style={styles.chopItemTime}>
                       {startSec.toFixed(2)}s
                     </Text>
+                  </View>
+                  <View style={styles.chopNudgeControls}>
+                    <TouchableOpacity
+                      style={styles.chopNudgeBtn}
+                      onPress={() => nudgeChop(idx, -1)}
+                    >
+                      <Text style={styles.chopNudgeBtnText}>{"<"}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.chopNudgeBtn}
+                      onPress={() => nudgeChop(idx, 1)}
+                    >
+                      <Text style={styles.chopNudgeBtnText}>{">"}</Text>
+                    </TouchableOpacity>
                   </View>
                   <View style={styles.chopLenControls}>
                     <TouchableOpacity
@@ -876,6 +908,26 @@ const styles = StyleSheet.create({
   chopItemTime: {
     color: colors.stone,
     fontSize: 11,
+  },
+  chopNudgeControls: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+  },
+  chopNudgeBtn: {
+    width: 26,
+    height: 26,
+    borderRadius: 4,
+    backgroundColor: colors.pine,
+    borderWidth: 1,
+    borderColor: colors.fern,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  chopNudgeBtnText: {
+    color: colors.sage,
+    fontSize: 14,
+    fontWeight: "700",
   },
   chopLenControls: {
     flexDirection: "row",
