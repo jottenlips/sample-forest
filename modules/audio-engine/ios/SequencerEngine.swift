@@ -1,5 +1,4 @@
 import AVFoundation
-import os
 
 /// Core audio engine that handles all scheduling and playback natively.
 /// All audio graph management and step scheduling happens here — no JS bridge calls during playback.
@@ -32,7 +31,12 @@ final class SequencerEngine {
     private let lookaheadSeconds: Double = 0.200 // 200ms lookahead
 
     // MARK: - Thread safety
-    private var lock = os_unfair_lock()
+    // Heap-allocated so the pointer is stable (os_unfair_lock requires fixed address)
+    private let lock: UnsafeMutablePointer<os_unfair_lock> = {
+        let ptr = UnsafeMutablePointer<os_unfair_lock>.allocate(capacity: 1)
+        ptr.initialize(to: os_unfair_lock())
+        return ptr
+    }()
 
     // MARK: - Step callback (for sending events back to JS)
     var onStepChange: ((_ step: Int, _ tripletStep: Int) -> Void)?
@@ -41,8 +45,13 @@ final class SequencerEngine {
 
     init() {
         configureAudioSession()
-        // Start engine eagerly so format queries work
         ensureEngineRunning()
+    }
+
+    deinit {
+        schedulerTimer?.cancel()
+        lock.deinitialize(count: 1)
+        lock.deallocate()
     }
 
     private func configureAudioSession() {
@@ -66,15 +75,19 @@ final class SequencerEngine {
     // MARK: - Channel management
 
     func addChannel(id: Int) {
-        os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
-
-        guard channels[id] == nil else { return }
+        os_unfair_lock_lock(lock)
+        guard channels[id] == nil else {
+            os_unfair_lock_unlock(lock)
+            return
+        }
 
         let channel = ChannelState(id: id)
+        channels[id] = channel
+        os_unfair_lock_unlock(lock)
+
+        // Engine graph mutations must not be under the spinlock (they can block)
         let format = processingFormat
 
-        // Attach all nodes to engine
         for player in channel.playerNodes {
             engine.attach(player)
         }
@@ -82,33 +95,31 @@ final class SequencerEngine {
         engine.attach(channel.timePitchNode)
         engine.attach(channel.mixerNode)
 
-        // Wire: each player → playerMixer (auto-assigns input buses)
-        // playerMixer merges multiple players into one stream
-        for player in channel.playerNodes {
-            engine.connect(player, to: channel.playerMixer, format: format)
+        // Wire each player to a separate input bus on playerMixer
+        for (i, player) in channel.playerNodes.enumerated() {
+            engine.connect(player, to: channel.playerMixer, fromBus: 0, toBus: i, format: format)
         }
-        // playerMixer → timePitch → channelMixer → mainMixer
         engine.connect(channel.playerMixer, to: channel.timePitchNode, format: format)
         engine.connect(channel.timePitchNode, to: channel.mixerNode, format: format)
         engine.connect(channel.mixerNode, to: engine.mainMixerNode, format: format)
 
         channel.applyVolume()
-        channels[id] = channel
-
         ensureEngineRunning()
 
-        // Start player nodes
         for player in channel.playerNodes {
             player.play()
         }
     }
 
     func removeChannel(id: Int) {
-        os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
+        os_unfair_lock_lock(lock)
+        guard let channel = channels.removeValue(forKey: id) else {
+            os_unfair_lock_unlock(lock)
+            return
+        }
+        os_unfair_lock_unlock(lock)
 
-        guard let channel = channels.removeValue(forKey: id) else { return }
-
+        // Detach outside the lock
         for player in channel.playerNodes {
             player.stop()
             engine.detach(player)
@@ -129,7 +140,6 @@ final class SequencerEngine {
         volume: Float,
         preservePitch: Bool
     ) throws {
-        // Read audio file
         let url: URL
         if uri.hasPrefix("file://") {
             guard let fileUrl = URL(string: uri) else {
@@ -148,7 +158,6 @@ final class SequencerEngine {
             throw NSError(domain: "AudioEngine", code: 2, userInfo: [NSLocalizedDescriptionKey: "Empty audio file"])
         }
 
-        // Read full file into buffer
         guard let fullBuffer = AVAudioPCMBuffer(pcmFormat: fileFormat, frameCapacity: totalFrames) else {
             throw NSError(domain: "AudioEngine", code: 3, userInfo: [NSLocalizedDescriptionKey: "Could not allocate buffer"])
         }
@@ -190,7 +199,6 @@ final class SequencerEngine {
 
         if fileFormat.sampleRate != targetFormat.sampleRate || fileFormat.channelCount != targetFormat.channelCount {
             guard let converter = AVAudioConverter(from: fileFormat, to: targetFormat) else {
-                // Can't convert — use as-is (may cause issues if format mismatch is severe)
                 applyToChannel(channelId: channelId, buffer: trimmedBuffer, playbackRate: playbackRate, volume: volume, preservePitch: preservePitch)
                 return
             }
@@ -218,20 +226,18 @@ final class SequencerEngine {
     }
 
     private func applyToChannel(channelId: Int, buffer: AVAudioPCMBuffer, playbackRate: Float, volume: Float, preservePitch: Bool) {
-        os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
+        os_unfair_lock_lock(lock)
+        defer { os_unfair_lock_unlock(lock) }
 
         guard let channel = channels[channelId] else { return }
         channel.buffer = buffer
         channel.sampleVolume = volume
 
-        // Configure time pitch node
         channel.timePitchNode.rate = playbackRate
         channel.timePitchNode.overlap = 8
         if preservePitch {
             channel.timePitchNode.pitch = 0
         } else {
-            // To NOT preserve pitch, shift pitch to match rate change
             let pitchCents = 1200.0 * log2(Double(playbackRate))
             channel.timePitchNode.pitch = Float(pitchCents)
         }
@@ -240,18 +246,17 @@ final class SequencerEngine {
     }
 
     func unloadSample(channelId: Int) {
-        os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
+        os_unfair_lock_lock(lock)
+        defer { os_unfair_lock_unlock(lock) }
 
-        guard let channel = channels[channelId] else { return }
-        channel.buffer = nil
+        channels[channelId]?.buffer = nil
     }
 
     // MARK: - Pattern updates
 
     func updatePattern(channelId: Int, steps: [Bool], tripletSteps: [Bool]) {
-        os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
+        os_unfair_lock_lock(lock)
+        defer { os_unfair_lock_unlock(lock) }
 
         guard let channel = channels[channelId] else { return }
         channel.steps = steps
@@ -261,22 +266,20 @@ final class SequencerEngine {
     // MARK: - Channel state
 
     func setChannelMuted(id: Int, muted: Bool) {
-        os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
-
+        os_unfair_lock_lock(lock)
+        defer { os_unfair_lock_unlock(lock) }
         channels[id]?.muted = muted
     }
 
     func setChannelSolo(id: Int, solo: Bool) {
-        os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
-
+        os_unfair_lock_lock(lock)
+        defer { os_unfair_lock_unlock(lock) }
         channels[id]?.solo = solo
     }
 
     func setChannelVolume(id: Int, volume: Float) {
-        os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
+        os_unfair_lock_lock(lock)
+        defer { os_unfair_lock_unlock(lock) }
 
         guard let channel = channels[id] else { return }
         channel.channelVolume = volume
@@ -284,8 +287,8 @@ final class SequencerEngine {
     }
 
     func setSampleVolume(id: Int, volume: Float) {
-        os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
+        os_unfair_lock_lock(lock)
+        defer { os_unfair_lock_unlock(lock) }
 
         guard let channel = channels[id] else { return }
         channel.sampleVolume = volume
@@ -295,8 +298,8 @@ final class SequencerEngine {
     // MARK: - Sequencer params
 
     func updateSequencer(bpm: Double, stepCount: Int, swing: Double) {
-        os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
+        os_unfair_lock_lock(lock)
+        defer { os_unfair_lock_unlock(lock) }
 
         self.bpm = bpm
         self.stepCount = stepCount
@@ -306,9 +309,9 @@ final class SequencerEngine {
     // MARK: - Transport
 
     func play() {
-        os_unfair_lock_lock(&lock)
+        os_unfair_lock_lock(lock)
         guard !isPlaying else {
-            os_unfair_lock_unlock(&lock)
+            os_unfair_lock_unlock(lock)
             return
         }
         isPlaying = true
@@ -319,20 +322,23 @@ final class SequencerEngine {
         playStartHostTime = now
         nextStepHostTime = now
         nextTripletHostTime = now
-        os_unfair_lock_unlock(&lock)
 
-        ensureEngineRunning()
-
-        // Restart player nodes
-        os_unfair_lock_lock(&lock)
+        // Collect players that need starting while under lock
+        var playersToStart: [AVAudioPlayerNode] = []
         for (_, channel) in channels {
             for player in channel.playerNodes {
                 if !player.isPlaying {
-                    player.play()
+                    playersToStart.append(player)
                 }
             }
         }
-        os_unfair_lock_unlock(&lock)
+        os_unfair_lock_unlock(lock)
+
+        ensureEngineRunning()
+
+        for player in playersToStart {
+            player.play()
+        }
 
         startScheduler()
     }
@@ -340,27 +346,26 @@ final class SequencerEngine {
     func stop() {
         stopScheduler()
 
-        os_unfair_lock_lock(&lock)
+        os_unfair_lock_lock(lock)
         isPlaying = false
         currentStep = 0
         currentTripletStep = 0
-        os_unfair_lock_unlock(&lock)
+        os_unfair_lock_unlock(lock)
 
-        // Notify JS that playback stopped
         onStepChange?(-1, -1)
     }
 
     // MARK: - Preview
 
     func previewSample(channelId: Int) {
-        os_unfair_lock_lock(&lock)
+        os_unfair_lock_lock(lock)
         guard let channel = channels[channelId],
               let buffer = channel.buffer else {
-            os_unfair_lock_unlock(&lock)
+            os_unfair_lock_unlock(lock)
             return
         }
         let player = channel.nextPlayer
-        os_unfair_lock_unlock(&lock)
+        os_unfair_lock_unlock(lock)
 
         ensureEngineRunning()
         if !player.isPlaying {
@@ -389,9 +394,9 @@ final class SequencerEngine {
     }
 
     private func schedulerTick() {
-        os_unfair_lock_lock(&lock)
+        os_unfair_lock_lock(lock)
         guard isPlaying else {
-            os_unfair_lock_unlock(&lock)
+            os_unfair_lock_unlock(lock)
             return
         }
 
@@ -399,29 +404,27 @@ final class SequencerEngine {
         let lookaheadTicks = HostTimeUtils.secondsToHostTime(lookaheadSeconds)
         let deadline = now + lookaheadTicks
 
-        let stepDuration = (60.0 / bpm) / 4.0  // seconds per step
+        let stepDuration = (60.0 / bpm) / 4.0
         let tripletDuration = stepDuration * (2.0 / 3.0)
-        let tripletCount = Int(floor(Double(stepCount) * 3.0 / 2.0))
+        let tripletCount = max(1, Int(floor(Double(stepCount) * 3.0 / 2.0)))
         let swingAmount = (swing / 100.0) * 0.75
 
         let hasSolo = channels.values.contains { $0.solo }
 
-        // Snapshot channels for scheduling
-        let channelSnapshot = channels
+        // Snapshot values we need — channels dict is reference types so snapshot is shallow
+        let channelSnapshot = Array(channels.values)
 
         // Schedule normal steps
         while nextStepHostTime <= deadline {
             let step = currentStep
             let scheduleTime = nextStepHostTime
 
-            // Apply swing to offbeats
             let isOffbeat = step % 2 == 1
             let swingDelaySeconds = isOffbeat ? swingAmount * stepDuration : 0.0
             let swingDelayTicks = HostTimeUtils.secondsToHostTime(swingDelaySeconds)
             let actualTime = scheduleTime + swingDelayTicks
 
-            // Schedule buffers for active channels
-            for (_, channel) in channelSnapshot {
+            for channel in channelSnapshot {
                 guard step < channel.steps.count, channel.steps[step] else { continue }
                 guard let buffer = channel.buffer else { continue }
                 guard !channel.muted else { continue }
@@ -432,7 +435,6 @@ final class SequencerEngine {
                 player.scheduleBuffer(buffer, at: audioTime, options: [], completionHandler: nil)
             }
 
-            // Notify JS of step change
             let stepCallback = self.onStepChange
             let capturedTripletStep = currentTripletStep
             DispatchQueue.main.async {
@@ -440,14 +442,14 @@ final class SequencerEngine {
             }
 
             nextStepHostTime += HostTimeUtils.secondsToHostTime(stepDuration)
-            currentStep = (currentStep + 1) % stepCount
+            currentStep = (currentStep + 1) % max(1, stepCount)
         }
 
         // Schedule triplet steps
         while nextTripletHostTime <= deadline {
             let tripletStep = currentTripletStep
 
-            for (_, channel) in channelSnapshot {
+            for channel in channelSnapshot {
                 guard tripletStep < channel.tripletSteps.count, channel.tripletSteps[tripletStep] else { continue }
                 guard let buffer = channel.buffer else { continue }
                 guard !channel.muted else { continue }
@@ -462,6 +464,6 @@ final class SequencerEngine {
             currentTripletStep = (currentTripletStep + 1) % tripletCount
         }
 
-        os_unfair_lock_unlock(&lock)
+        os_unfair_lock_unlock(lock)
     }
 }
