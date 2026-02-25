@@ -2,71 +2,80 @@ import { useRef, useCallback, useEffect } from 'react';
 import { Audio } from 'expo-av';
 import { Channel } from '../types';
 
+const POOL_SIZE = 3;
+
 export function useChannelPlayer(channel: Channel) {
-  const soundRef = useRef<Audio.Sound | null>(null);
+  const poolRef = useRef<Audio.Sound[]>([]);
+  const poolIndexRef = useRef(0);
   const isLoadedRef = useRef(false);
   const currentUriRef = useRef<string | null>(null);
 
-  // Load sound when sample changes
+  // Load a pool of Sound instances when sample changes
   useEffect(() => {
-    const loadSound = async () => {
-      // Unload previous sound
-      if (soundRef.current) {
-        try {
-          await soundRef.current.unloadAsync();
-        } catch {}
-        soundRef.current = null;
-        isLoadedRef.current = false;
+    const loadPool = async () => {
+      // Unload previous pool
+      for (const sound of poolRef.current) {
+        try { await sound.unloadAsync(); } catch {}
       }
+      poolRef.current = [];
+      isLoadedRef.current = false;
+      poolIndexRef.current = 0;
 
       if (!channel.sample) {
         currentUriRef.current = null;
         return;
       }
 
-      // Skip if same URI already loaded
       if (currentUriRef.current === channel.sample.uri && isLoadedRef.current) {
         return;
       }
 
       try {
-        const { sound } = await Audio.Sound.createAsync(
-          { uri: channel.sample.uri },
-          {
-            shouldPlay: false,
-            volume: channel.sample.volume * channel.volume,
-            rate: channel.sample.playbackRate,
-            shouldCorrectPitch: channel.sample.preservePitch,
-          },
-        );
-        soundRef.current = sound;
+        const sounds: Audio.Sound[] = [];
+        for (let i = 0; i < POOL_SIZE; i++) {
+          const { sound } = await Audio.Sound.createAsync(
+            { uri: channel.sample.uri },
+            {
+              shouldPlay: false,
+              volume: channel.sample.volume * channel.volume,
+              rate: channel.sample.playbackRate,
+              shouldCorrectPitch: channel.sample.preservePitch,
+            },
+          );
+          sounds.push(sound);
+        }
+        poolRef.current = sounds;
         isLoadedRef.current = true;
         currentUriRef.current = channel.sample.uri;
       } catch (err) {
-        console.error(`Failed to load sound for channel ${channel.id}:`, err);
+        console.error(`Failed to load sounds for channel ${channel.id}:`, err);
       }
     };
 
-    loadSound();
+    loadPool();
 
     return () => {
-      if (soundRef.current) {
-        soundRef.current.unloadAsync().catch(() => {});
-        soundRef.current = null;
-        isLoadedRef.current = false;
+      for (const sound of poolRef.current) {
+        sound.unloadAsync().catch(() => {});
       }
+      poolRef.current = [];
+      isLoadedRef.current = false;
     };
   }, [channel.sample?.uri]);
 
-  // Update playback settings when they change
+  // Update playback settings on all pool instances
   useEffect(() => {
-    if (!soundRef.current || !isLoadedRef.current || !channel.sample) return;
+    if (!isLoadedRef.current || !channel.sample) return;
 
-    soundRef.current.setStatusAsync({
+    const status = {
       volume: channel.sample.volume * channel.volume,
       rate: channel.sample.playbackRate,
       shouldCorrectPitch: channel.sample.preservePitch,
-    }).catch(() => {});
+    };
+
+    for (const sound of poolRef.current) {
+      sound.setStatusAsync(status).catch(() => {});
+    }
   }, [
     channel.sample?.volume,
     channel.sample?.playbackRate,
@@ -74,42 +83,35 @@ export function useChannelPlayer(channel: Channel) {
     channel.volume,
   ]);
 
-  const trigger = useCallback(async () => {
-    if (!soundRef.current || !isLoadedRef.current || !channel.sample) return;
+  const trigger = useCallback(() => {
+    if (!isLoadedRef.current || !channel.sample || poolRef.current.length === 0) return;
     if (channel.muted) return;
 
-    try {
-      const trimStartSec = (channel.sample.trimStartMs || 0) / 1000;
-      await soundRef.current.setPositionAsync(channel.sample.trimStartMs || 0);
-      await soundRef.current.playAsync();
+    // Round-robin through the pool — fire and forget (no await)
+    const sound = poolRef.current[poolIndexRef.current % poolRef.current.length];
+    poolIndexRef.current = (poolIndexRef.current + 1) % poolRef.current.length;
 
-      // Schedule stop at trim end
-      if (channel.sample.trimEndMs && channel.sample.trimEndMs < channel.sample.durationMs) {
-        const playDuration =
-          (channel.sample.trimEndMs - (channel.sample.trimStartMs || 0)) /
-          channel.sample.playbackRate;
-        setTimeout(async () => {
-          try {
-            if (soundRef.current) {
-              await soundRef.current.pauseAsync();
-            }
-          } catch {}
-        }, playDuration);
-      }
-    } catch (err) {
-      console.error(`Failed to trigger channel ${channel.id}:`, err);
+    const trimStart = channel.sample.trimStartMs || 0;
+    sound.replayAsync({ positionMillis: trimStart }).catch(() => {});
+
+    // Schedule stop at trim end if needed
+    if (channel.sample.trimEndMs && channel.sample.trimEndMs < channel.sample.durationMs) {
+      const playDuration =
+        (channel.sample.trimEndMs - trimStart) / channel.sample.playbackRate;
+      setTimeout(() => {
+        sound.pauseAsync().catch(() => {});
+      }, playDuration);
     }
   }, [channel.sample, channel.muted]);
 
-  const stop = useCallback(async () => {
-    if (!soundRef.current || !isLoadedRef.current) return;
-    try {
-      await soundRef.current.stopAsync();
-    } catch {}
+  const stop = useCallback(() => {
+    for (const sound of poolRef.current) {
+      sound.stopAsync().catch(() => {});
+    }
   }, []);
 
-  const preview = useCallback(async () => {
-    await trigger();
+  const preview = useCallback(() => {
+    trigger();
   }, [trigger]);
 
   return { trigger, stop, preview };

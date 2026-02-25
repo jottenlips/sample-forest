@@ -6,17 +6,24 @@ import {
   ScrollView,
   StyleSheet,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
+import { Audio } from 'expo-av';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { useAppStore } from '../state/useAppStore';
 import {
   renderSong,
+  renderSongNative,
   downloadWav,
+  shareWavNative,
   sceneDuration,
   ExportMode,
   SongScene,
 } from '../utils/offlineRenderer';
+import { encodeWavFromSamples } from '../utils/oscillator';
+
+const isWeb = Platform.OS === 'web';
 
 interface ExportScreenProps {
   onClose: () => void;
@@ -32,8 +39,12 @@ export function ExportScreen({ onClose }: ExportScreenProps) {
   const [isRendering, setIsRendering] = useState(false);
   const [progressMsg, setProgressMsg] = useState('');
   const [isPreviewing, setIsPreviewing] = useState(false);
+
+  // Web preview refs
   const previewCtxRef = useRef<AudioContext | null>(null);
   const previewSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  // Native preview ref
+  const previewSoundRef = useRef<Audio.Sound | null>(null);
 
   const channelsWithSamples = channels.filter((ch) => ch.sample);
 
@@ -69,23 +80,33 @@ export function ExportScreen({ onClose }: ExportScreenProps) {
     return m > 0 ? `${m}m ${s}s` : `${s}s`;
   };
 
-  // ── Preview ────────────────────────────────────────────────────
+  // ── Stop preview ───────────────────────────────────────────────
 
-  const stopPreview = useCallback(() => {
-    if (previewSourceRef.current) {
-      try { previewSourceRef.current.stop(); } catch {}
-      previewSourceRef.current = null;
-    }
-    if (previewCtxRef.current) {
-      previewCtxRef.current.close();
-      previewCtxRef.current = null;
+  const stopPreview = useCallback(async () => {
+    if (isWeb) {
+      if (previewSourceRef.current) {
+        try { previewSourceRef.current.stop(); } catch {}
+        previewSourceRef.current = null;
+      }
+      if (previewCtxRef.current) {
+        previewCtxRef.current.close();
+        previewCtxRef.current = null;
+      }
+    } else {
+      if (previewSoundRef.current) {
+        try { await previewSoundRef.current.stopAsync(); } catch {}
+        try { await previewSoundRef.current.unloadAsync(); } catch {}
+        previewSoundRef.current = null;
+      }
     }
     setIsPreviewing(false);
   }, []);
 
+  // ── Preview ────────────────────────────────────────────────────
+
   const handlePreview = async () => {
     if (isPreviewing) {
-      stopPreview();
+      await stopPreview();
       return;
     }
     if (songScenes.length === 0) return;
@@ -94,26 +115,60 @@ export function ExportScreen({ onClose }: ExportScreenProps) {
     setProgressMsg('Rendering preview...');
 
     try {
-      const results = await renderSong(songScenes, channels, {
-        mode: 'mix',
-        onProgress: setProgressMsg,
-      });
+      if (isWeb) {
+        const results = await renderSong(songScenes, channels, {
+          mode: 'mix',
+          onProgress: setProgressMsg,
+        });
 
-      const buf = results.get('mix');
-      if (!buf) { setIsPreviewing(false); return; }
+        const buf = results.get('mix');
+        if (!buf) { setIsPreviewing(false); return; }
 
-      const ctx = new AudioContext();
-      previewCtxRef.current = ctx;
-      const source = ctx.createBufferSource();
-      source.buffer = buf;
-      source.connect(ctx.destination);
-      source.onended = () => {
-        setIsPreviewing(false);
-        previewCtxRef.current = null;
-        previewSourceRef.current = null;
-      };
-      previewSourceRef.current = source;
-      source.start();
+        const ctx = new AudioContext();
+        previewCtxRef.current = ctx;
+        const source = ctx.createBufferSource();
+        source.buffer = buf;
+        source.connect(ctx.destination);
+        source.onended = () => {
+          setIsPreviewing(false);
+          previewCtxRef.current = null;
+          previewSourceRef.current = null;
+        };
+        previewSourceRef.current = source;
+        source.start();
+      } else {
+        const results = await renderSongNative(songScenes, channels, {
+          mode: 'mix',
+          onProgress: setProgressMsg,
+        });
+
+        const samples = results.get('mix');
+        if (!samples) { setIsPreviewing(false); return; }
+
+        // Encode to WAV and write temp file
+        const wavBuffer = encodeWavFromSamples(samples);
+        const { Paths, Directory, File } = await import('expo-file-system');
+        const tmpDir = new Directory(Paths.cache, 'preview');
+        if (!tmpDir.exists) tmpDir.create();
+        const tmpFile = new File(tmpDir, 'preview.wav');
+        if (tmpFile.exists) tmpFile.delete();
+        tmpFile.create();
+        tmpFile.write(new Uint8Array(wavBuffer));
+
+        const { sound } = await Audio.Sound.createAsync(
+          { uri: tmpFile.uri },
+          { shouldPlay: true },
+        );
+        previewSoundRef.current = sound;
+
+        sound.setOnPlaybackStatusUpdate((status) => {
+          if (status.isLoaded && status.didJustFinish) {
+            setIsPreviewing(false);
+            sound.unloadAsync().catch(() => {});
+            previewSoundRef.current = null;
+          }
+        });
+      }
     } catch (err) {
       console.error('Preview error:', err);
       setIsPreviewing(false);
@@ -131,16 +186,30 @@ export function ExportScreen({ onClose }: ExportScreenProps) {
     setProgressMsg('Starting export...');
 
     try {
-      const results = await renderSong(songScenes, channels, {
-        mode: exportMode,
-        channelId: selectedChannelId ?? undefined,
-        onProgress: setProgressMsg,
-      });
+      if (isWeb) {
+        const results = await renderSong(songScenes, channels, {
+          mode: exportMode,
+          channelId: selectedChannelId ?? undefined,
+          onProgress: setProgressMsg,
+        });
 
-      setProgressMsg('Encoding WAV...');
-      for (const [label, buffer] of results) {
-        const safeName = label.replace(/[^a-zA-Z0-9_-]/g, '_');
-        downloadWav(buffer, `${safeName}.wav`);
+        setProgressMsg('Encoding WAV...');
+        for (const [label, buffer] of results) {
+          const safeName = label.replace(/[^a-zA-Z0-9_-]/g, '_');
+          downloadWav(buffer, `${safeName}.wav`);
+        }
+      } else {
+        const results = await renderSongNative(songScenes, channels, {
+          mode: exportMode,
+          channelId: selectedChannelId ?? undefined,
+          onProgress: setProgressMsg,
+        });
+
+        for (const [label, samples] of results) {
+          const safeName = label.replace(/[^a-zA-Z0-9_-]/g, '_');
+          setProgressMsg(`Saving ${safeName}.wav...`);
+          await shareWavNative(samples, 44100, `${safeName}.wav`);
+        }
       }
       setProgressMsg('Done!');
     } catch (err) {

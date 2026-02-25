@@ -9,10 +9,8 @@ interface SequencerGridProps {
   channelId: number;
 }
 
-export function SequencerGrid({ channelId }: SequencerGridProps) {
+export const SequencerGrid = React.memo(function SequencerGrid({ channelId }: SequencerGridProps) {
   const channel = useAppStore((s) => s.channels.find((c) => c.id === channelId));
-  const currentStep = useAppStore((s) => s.sequencer.currentStep);
-  const isPlaying = useAppStore((s) => s.sequencer.isPlaying);
   const toggleStep = useAppStore((s) => s.toggleStep);
 
   if (!channel) return null;
@@ -31,8 +29,8 @@ export function SequencerGrid({ channelId }: SequencerGridProps) {
           {row.map((i) => (
             <StepButton
               key={i}
+              stepIndex={i}
               active={channel.steps[i]}
-              isCurrentStep={isPlaying && currentStep === i}
               isDownbeat={i % 4 === 0}
               onPress={() => toggleStep(channelId, i)}
             />
@@ -45,7 +43,7 @@ export function SequencerGrid({ channelId }: SequencerGridProps) {
       ))}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {

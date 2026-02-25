@@ -1,20 +1,30 @@
-import React from "react";
+import React, { useSyncExternalStore, useCallback } from "react";
 import { TouchableOpacity, StyleSheet } from "react-native";
 import { colors } from "../../theme/colors";
+import { stepIndicator } from "../../utils/stepIndicator";
 
 interface StepButtonProps {
+  stepIndex: number;
   active: boolean;
-  isCurrentStep: boolean;
   isDownbeat: boolean;
   onPress: () => void;
 }
 
 export const StepButton = React.memo(function StepButton({
+  stepIndex,
   active,
-  isCurrentStep,
   isDownbeat,
   onPress,
 }: StepButtonProps) {
+  // Subscribe to the lightweight step indicator — only re-renders when
+  // THIS button's "is current" status actually changes.
+  const isCurrentStep = useSyncExternalStore(
+    stepIndicator.subscribe,
+    useCallback(() => {
+      return stepIndicator.getIsPlaying() && stepIndicator.getStep() === stepIndex;
+    }, [stepIndex]),
+  );
+
   const bgColor =
     isCurrentStep && active
       ? colors.seafoam

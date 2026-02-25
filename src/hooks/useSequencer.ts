@@ -1,6 +1,7 @@
 import { useRef, useCallback, useEffect } from 'react';
 import { useAppStore } from '../state/useAppStore';
 import { getTripletStepCount } from '../types';
+import { stepIndicator } from '../utils/stepIndicator';
 
 type TriggerCallback = (channelId: number) => void;
 
@@ -9,8 +10,6 @@ export function useSequencer(triggerCallbacks: Map<number, TriggerCallback>) {
   const isPlaying = useAppStore((s) => s.sequencer.isPlaying);
   const bpm = useAppStore((s) => s.sequencer.bpm);
   const setPlaying = useAppStore((s) => s.setPlaying);
-  const setCurrentStep = useAppStore((s) => s.setCurrentStep);
-  const setCurrentTripletStep = useAppStore((s) => s.setCurrentTripletStep);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const nextStepTimeRef = useRef<number>(0);
@@ -73,7 +72,7 @@ export function useSequencer(triggerCallbacks: Map<number, TriggerCallback>) {
 
       const capturedStep = step;
       setTimeout(() => {
-        setCurrentStep(capturedStep);
+        stepIndicator.setStep(capturedStep);
 
         channels.forEach((channel) => {
           if (!channel.steps[capturedStep]) return;
@@ -115,7 +114,7 @@ export function useSequencer(triggerCallbacks: Map<number, TriggerCallback>) {
       const capturedTripletStep = tripletStep;
 
       setTimeout(() => {
-        setCurrentTripletStep(capturedTripletStep);
+        stepIndicator.setTripletStep(capturedTripletStep);
 
         channels.forEach((channel) => {
           if (!channel.tripletSteps[capturedTripletStep]) return;
@@ -142,7 +141,7 @@ export function useSequencer(triggerCallbacks: Map<number, TriggerCallback>) {
       nextTripletTimeRef.current += tripletDuration;
       currentTripletStepRef.current = (currentTripletStepRef.current + 1) % tripletCount;
     }
-  }, [setCurrentStep, setCurrentTripletStep]);
+  }, []);
 
   const start = useCallback(() => {
     if (intervalRef.current) return;
@@ -152,6 +151,7 @@ export function useSequencer(triggerCallbacks: Map<number, TriggerCallback>) {
     nextStepTimeRef.current = Date.now();
     nextTripletTimeRef.current = Date.now();
     setPlaying(true);
+    stepIndicator.setIsPlaying(true);
 
     intervalRef.current = setInterval(schedulerTick, TICK_MS);
   }, [schedulerTick, setPlaying]);
@@ -162,11 +162,10 @@ export function useSequencer(triggerCallbacks: Map<number, TriggerCallback>) {
       intervalRef.current = null;
     }
     setPlaying(false);
-    setCurrentStep(0);
-    setCurrentTripletStep(0);
+    stepIndicator.setIsPlaying(false);
     currentStepRef.current = 0;
     currentTripletStepRef.current = 0;
-  }, [setPlaying, setCurrentStep, setCurrentTripletStep]);
+  }, [setPlaying]);
 
   useEffect(() => {
     return () => {
