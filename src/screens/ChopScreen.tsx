@@ -16,6 +16,8 @@ import { colors } from "../theme/colors";
 import { useAppStore } from "../state/useAppStore";
 import { encodeWav } from "../utils/wavEncoder";
 import { detectBpm, beatLengthSec } from "../utils/bpmDetect";
+import { DecodedAudio, decodeAudioFile, encodeChopToUri } from "../utils/audioDecoder";
+import { pickAudioFile } from "../utils/audioFiles";
 
 const NUM_CHOPS = 8;
 
@@ -42,7 +44,7 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
   const loadSample = useAppStore((s) => s.loadSample);
   const sequencerBpm = useAppStore((s) => s.sequencer.bpm);
 
-  const [audioBuffer, setAudioBuffer] = useState<AudioBuffer | null>(null);
+  const [audioBuffer, setAudioBuffer] = useState<DecodedAudio | null>(null);
   const [waveformData, setWaveformData] = useState<number[]>([]);
   const [fileName, setFileName] = useState("");
   const [bpm, setBpm] = useState<number | null>(null);
@@ -62,7 +64,7 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
   const waveformHeight = 140;
 
   const processAudioBuffer = useCallback(
-    (decoded: AudioBuffer, name: string) => {
+    (decoded: DecodedAudio, name: string) => {
       setAudioBuffer(decoded);
       setFileName(name);
 
@@ -99,33 +101,28 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
   );
 
   const handlePickFile = useCallback(async () => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept =
-      ".wav,.mp3,audio/wav,audio/x-wav,audio/mpeg,audio/mp3,audio/*";
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
+    setLoading(true);
+    setLoadingMessage("Picking file...");
+    setError("");
 
-      setLoading(true);
-      setLoadingMessage("Decoding audio...");
-      setError("");
-
-      try {
-        const arrayBuffer = await file.arrayBuffer();
-        const audioCtx = new AudioContext();
-        setLoadingMessage("Analyzing tempo...");
-        const decoded = await audioCtx.decodeAudioData(arrayBuffer);
-        processAudioBuffer(decoded, file.name);
-      } catch (e) {
-        console.error("Failed to decode audio:", e);
-        setError("Failed to decode audio file");
-      } finally {
+    try {
+      const picked = await pickAudioFile();
+      if (!picked) {
         setLoading(false);
+        return;
       }
-    };
-    input.click();
-  }, []);
+
+      setLoadingMessage("Decoding audio...");
+      const decoded = await decodeAudioFile(picked.uri);
+      setLoadingMessage("Analyzing tempo...");
+      processAudioBuffer(decoded, picked.name);
+    } catch (e) {
+      console.error("Failed to decode audio:", e);
+      setError("Failed to decode audio file.");
+    } finally {
+      setLoading(false);
+    }
+  }, [processAudioBuffer]);
 
   const handleReshuffle = useCallback(() => {
     if (!audioBuffer) return;
@@ -165,11 +162,10 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
           audioBuffer.length,
         );
 
-        const wavBlob = encodeWav(audioBuffer, sliceStart, sliceEnd);
-        const blobUrl = URL.createObjectURL(wavBlob);
+        const chopUri = await encodeChopToUri(audioBuffer, sliceStart, sliceEnd);
 
         const { sound } = await Audio.Sound.createAsync(
-          { uri: blobUrl },
+          { uri: chopUri },
           { shouldPlay: true },
         );
         previewSoundRef.current = sound;
@@ -219,8 +215,7 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
         const effectiveBpm = 60 / thisChopLen;
         const rate = matchTempo ? sequencerBpm / effectiveBpm : 1.0;
 
-        const wavBlob = encodeWav(audioBuffer, sliceStart, sliceEnd);
-        const blobUrl = URL.createObjectURL(wavBlob);
+        const chopUri = await encodeChopToUri(audioBuffer, sliceStart, sliceEnd);
         const durationMs = ((sliceEnd - sliceStart) / sampleRate) * 1000;
 
         // Generate waveform for this slice
@@ -249,7 +244,7 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
 
         loadSample(newChannel.id, {
           id: `sample_${Date.now()}_${i}`,
-          uri: blobUrl,
+          uri: chopUri,
           name: `${fileName} [${startSec.toFixed(2)}s]`,
           durationMs,
           trimStartMs: 0,

@@ -2,7 +2,7 @@
  * Simple BPM detection using energy-based onset detection + autocorrelation.
  * Analyzes the audio buffer and returns an estimated BPM.
  */
-export function detectBpm(audioBuffer: AudioBuffer): number {
+export function detectBpm(audioBuffer: { getChannelData(ch: number): Float32Array; sampleRate: number }): number {
   const channelData = audioBuffer.getChannelData(0);
   const sampleRate = audioBuffer.sampleRate;
 
