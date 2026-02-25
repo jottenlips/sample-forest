@@ -4,7 +4,7 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  Alert,
+  Platform,
 } from "react-native";
 import { colors } from "../../theme/colors";
 import { useAppStore } from "../../state/useAppStore";
@@ -14,9 +14,20 @@ import { useRecorder } from "../../hooks/useRecorder";
 import { pickAudioFile, createSampleFromFile } from "../../utils/audioFiles";
 import { Audio } from "expo-av";
 import { Sample } from "../../types";
-import * as AudioEngine from "../../../modules/audio-engine";
 
 async function getAudioDuration(uri: string): Promise<number> {
+  if (Platform.OS === "web") {
+    return new Promise((resolve) => {
+      const audio = new window.Audio();
+      audio.preload = "metadata";
+      audio.onloadedmetadata = () => {
+        const ms = isFinite(audio.duration) ? audio.duration * 1000 : 3000;
+        resolve(ms);
+      };
+      audio.onerror = () => resolve(3000);
+      audio.src = uri;
+    });
+  }
   try {
     const { sound } = await Audio.Sound.createAsync({ uri });
     const status = await sound.getStatusAsync();
@@ -77,27 +88,42 @@ export function ChannelRow({
       loadSample(channelId, sample);
     } catch (err) {
       console.error("Upload failed:", err);
-      Alert.alert("Upload Failed", "Could not load the audio file.");
+      if (Platform.OS === "web") {
+        alert("Could not load the audio file.");
+      } else {
+        const { Alert } = require("react-native");
+        Alert.alert("Upload Failed", "Could not load the audio file.");
+      }
     }
   };
 
   const handleTapSample = () => {
     if (channel.sample) {
-      AudioEngine.previewSample(channelId);
+      const trigger = triggerRef.current.get(channelId);
+      if (trigger) trigger();
     }
   };
 
   const handleLongPress = () => {
     if (channel.sample) {
-      Alert.alert("Sample Options", channel.sample.name, [
-        { text: "Edit", onPress: () => onEditSample(channelId) },
-        {
-          text: "Remove",
-          style: "destructive",
-          onPress: () => removeSample(channelId),
-        },
-        { text: "Cancel", style: "cancel" },
-      ]);
+      if (Platform.OS === "web") {
+        const action = window.prompt(
+          `Sample: ${channel.sample.name}\nType "edit" to edit or "remove" to remove:`,
+        );
+        if (action === "edit") onEditSample(channelId);
+        else if (action === "remove") removeSample(channelId);
+      } else {
+        const { Alert } = require("react-native");
+        Alert.alert("Sample Options", channel.sample.name, [
+          { text: "Edit", onPress: () => onEditSample(channelId) },
+          {
+            text: "Remove",
+            style: "destructive",
+            onPress: () => removeSample(channelId),
+          },
+          { text: "Cancel", style: "cancel" },
+        ]);
+      }
     }
   };
 
