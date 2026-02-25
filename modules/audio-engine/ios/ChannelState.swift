@@ -6,6 +6,8 @@ final class ChannelState {
 
     // Two player nodes for round-robin retriggering
     var playerNodes: [AVAudioPlayerNode]
+    // Per-player mixer to merge multiple players before timePitch
+    var playerMixer: AVAudioMixerNode
     var timePitchNode: AVAudioUnitTimePitch
     var mixerNode: AVAudioMixerNode
     var currentPlayerIndex: Int = 0
@@ -28,6 +30,7 @@ final class ChannelState {
     init(id: Int) {
         self.id = id
         self.playerNodes = [AVAudioPlayerNode(), AVAudioPlayerNode()]
+        self.playerMixer = AVAudioMixerNode()
         self.timePitchNode = AVAudioUnitTimePitch()
         self.mixerNode = AVAudioMixerNode()
     }

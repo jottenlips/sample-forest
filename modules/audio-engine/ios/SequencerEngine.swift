@@ -7,6 +7,9 @@ final class SequencerEngine {
     // MARK: - Audio engine
     private let engine = AVAudioEngine()
 
+    // Standard processing format — fixed so we don't depend on engine output format before start
+    private let processingFormat = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
+
     // MARK: - Channels (keyed by channel ID)
     private var channels: [Int: ChannelState] = [:]
 
@@ -38,6 +41,8 @@ final class SequencerEngine {
 
     init() {
         configureAudioSession()
+        // Start engine eagerly so format queries work
+        ensureEngineRunning()
     }
 
     private func configureAudioSession() {
@@ -67,19 +72,23 @@ final class SequencerEngine {
         guard channels[id] == nil else { return }
 
         let channel = ChannelState(id: id)
+        let format = processingFormat
 
-        // Attach nodes to engine
+        // Attach all nodes to engine
         for player in channel.playerNodes {
             engine.attach(player)
         }
+        engine.attach(channel.playerMixer)
         engine.attach(channel.timePitchNode)
         engine.attach(channel.mixerNode)
 
-        // Wire: players → timePitch → mixer → mainMixer
-        let format = engine.mainMixerNode.outputFormat(forBus: 0)
+        // Wire: each player → playerMixer (auto-assigns input buses)
+        // playerMixer merges multiple players into one stream
         for player in channel.playerNodes {
-            engine.connect(player, to: channel.timePitchNode, format: format)
+            engine.connect(player, to: channel.playerMixer, format: format)
         }
+        // playerMixer → timePitch → channelMixer → mainMixer
+        engine.connect(channel.playerMixer, to: channel.timePitchNode, format: format)
         engine.connect(channel.timePitchNode, to: channel.mixerNode, format: format)
         engine.connect(channel.mixerNode, to: engine.mainMixerNode, format: format)
 
@@ -104,6 +113,7 @@ final class SequencerEngine {
             player.stop()
             engine.detach(player)
         }
+        engine.detach(channel.playerMixer)
         engine.detach(channel.timePitchNode)
         engine.detach(channel.mixerNode)
     }
@@ -131,7 +141,7 @@ final class SequencerEngine {
         }
 
         let audioFile = try AVAudioFile(forReading: url)
-        let processingFormat = audioFile.processingFormat
+        let fileFormat = audioFile.processingFormat
 
         let totalFrames = AVAudioFrameCount(audioFile.length)
         guard totalFrames > 0 else {
@@ -139,13 +149,13 @@ final class SequencerEngine {
         }
 
         // Read full file into buffer
-        guard let fullBuffer = AVAudioPCMBuffer(pcmFormat: processingFormat, frameCapacity: totalFrames) else {
+        guard let fullBuffer = AVAudioPCMBuffer(pcmFormat: fileFormat, frameCapacity: totalFrames) else {
             throw NSError(domain: "AudioEngine", code: 3, userInfo: [NSLocalizedDescriptionKey: "Could not allocate buffer"])
         }
         try audioFile.read(into: fullBuffer)
 
         // Apply trim
-        let sampleRate = processingFormat.sampleRate
+        let sampleRate = fileFormat.sampleRate
         let startFrame = AVAudioFramePosition(trimStartMs / 1000.0 * sampleRate)
         let endFrame: AVAudioFramePosition
         if trimEndMs > trimStartMs {
@@ -158,13 +168,12 @@ final class SequencerEngine {
         let trimmedBuffer: AVAudioPCMBuffer
 
         if trimmedFrameCount > 0 && (startFrame > 0 || endFrame < AVAudioFramePosition(totalFrames)) {
-            guard let tb = AVAudioPCMBuffer(pcmFormat: processingFormat, frameCapacity: trimmedFrameCount) else {
+            guard let tb = AVAudioPCMBuffer(pcmFormat: fileFormat, frameCapacity: trimmedFrameCount) else {
                 throw NSError(domain: "AudioEngine", code: 4, userInfo: [NSLocalizedDescriptionKey: "Could not allocate trimmed buffer"])
             }
             tb.frameLength = trimmedFrameCount
 
-            // Copy trimmed region
-            let channelCount = Int(processingFormat.channelCount)
+            let channelCount = Int(fileFormat.channelCount)
             for ch in 0..<channelCount {
                 guard let src = fullBuffer.floatChannelData?[ch],
                       let dst = tb.floatChannelData?[ch] else { continue }
@@ -175,31 +184,30 @@ final class SequencerEngine {
             trimmedBuffer = fullBuffer
         }
 
-        // Convert to engine format if needed
-        let engineFormat = engine.mainMixerNode.outputFormat(forBus: 0)
+        // Convert to our standard processing format if needed
+        let targetFormat = processingFormat
         let finalBuffer: AVAudioPCMBuffer
 
-        if processingFormat.sampleRate != engineFormat.sampleRate || processingFormat.channelCount != engineFormat.channelCount {
-            guard let converter = AVAudioConverter(from: processingFormat, to: engineFormat) else {
-                // Use as-is if conversion not possible
-                finalBuffer = trimmedBuffer
-                applyToChannel(channelId: channelId, buffer: finalBuffer, playbackRate: playbackRate, volume: volume, preservePitch: preservePitch)
+        if fileFormat.sampleRate != targetFormat.sampleRate || fileFormat.channelCount != targetFormat.channelCount {
+            guard let converter = AVAudioConverter(from: fileFormat, to: targetFormat) else {
+                // Can't convert — use as-is (may cause issues if format mismatch is severe)
+                applyToChannel(channelId: channelId, buffer: trimmedBuffer, playbackRate: playbackRate, volume: volume, preservePitch: preservePitch)
                 return
             }
 
-            let ratio = engineFormat.sampleRate / processingFormat.sampleRate
+            let ratio = targetFormat.sampleRate / fileFormat.sampleRate
             let convertedCapacity = AVAudioFrameCount(Double(trimmedBuffer.frameLength) * ratio) + 100
-            guard let convertedBuffer = AVAudioPCMBuffer(pcmFormat: engineFormat, frameCapacity: convertedCapacity) else {
+            guard let convertedBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: convertedCapacity) else {
                 throw NSError(domain: "AudioEngine", code: 5, userInfo: [NSLocalizedDescriptionKey: "Could not allocate conversion buffer"])
             }
 
-            var error: NSError?
-            converter.convert(to: convertedBuffer, error: &error) { _, outStatus in
+            var convError: NSError?
+            converter.convert(to: convertedBuffer, error: &convError) { _, outStatus in
                 outStatus.pointee = .haveData
                 return trimmedBuffer
             }
-            if let error = error {
-                throw error
+            if let convError = convError {
+                throw convError
             }
             finalBuffer = convertedBuffer
         } else {
@@ -221,10 +229,9 @@ final class SequencerEngine {
         channel.timePitchNode.rate = playbackRate
         channel.timePitchNode.overlap = 8
         if preservePitch {
-            // TimePitch preserves pitch by default when changing rate
+            channel.timePitchNode.pitch = 0
         } else {
-            // To NOT preserve pitch, set pitch to compensate for rate change
-            // rate 2.0 = +1200 cents, rate 0.5 = -1200 cents
+            // To NOT preserve pitch, shift pitch to match rate change
             let pitchCents = 1200.0 * log2(Double(playbackRate))
             channel.timePitchNode.pitch = Float(pitchCents)
         }
@@ -425,7 +432,7 @@ final class SequencerEngine {
                 player.scheduleBuffer(buffer, at: audioTime, options: [], completionHandler: nil)
             }
 
-            // Notify JS of step change (fire on scheduler queue, debounced)
+            // Notify JS of step change
             let stepCallback = self.onStepChange
             let capturedTripletStep = currentTripletStep
             DispatchQueue.main.async {
@@ -440,7 +447,6 @@ final class SequencerEngine {
         while nextTripletHostTime <= deadline {
             let tripletStep = currentTripletStep
 
-            // Schedule buffers for active triplet channels
             for (_, channel) in channelSnapshot {
                 guard tripletStep < channel.tripletSteps.count, channel.tripletSteps[tripletStep] else { continue }
                 guard let buffer = channel.buffer else { continue }
