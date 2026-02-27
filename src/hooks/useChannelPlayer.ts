@@ -1,16 +1,82 @@
 import { useRef, useCallback, useEffect } from 'react';
+import { Platform } from 'react-native';
 import { Audio } from 'expo-av';
 import { Channel } from '../types';
+import { isNativeAvailable } from '../../modules/audio-engine';
 
-export function useChannelPlayer(channel: Channel) {
+// ──────────────────────────────────────────────────
+// iOS: Native buffer loading via AudioEngine module
+// ──────────────────────────────────────────────────
+function useChannelPlayerIOS(channel: Channel) {
+  const currentUriRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const AudioEngine = require('../../modules/audio-engine');
+
+    const loadNative = async () => {
+      // Unload previous
+      if (currentUriRef.current && currentUriRef.current !== channel.sample?.uri) {
+        try {
+          await AudioEngine.unloadSample(`ch_${channel.id}`);
+        } catch {}
+        currentUriRef.current = null;
+      }
+
+      if (!channel.sample) {
+        currentUriRef.current = null;
+        return;
+      }
+
+      if (currentUriRef.current === channel.sample.uri) return;
+
+      try {
+        await AudioEngine.loadSample(channel.sample.id, channel.sample.uri);
+        currentUriRef.current = channel.sample.uri;
+      } catch (err) {
+        console.error(`Failed to load native sample for channel ${channel.id}:`, err);
+      }
+    };
+
+    loadNative();
+
+    return () => {
+      if (channel.sample) {
+        AudioEngine.unloadSample(channel.sample.id).catch(() => {});
+      }
+    };
+  }, [channel.sample?.uri]);
+
+  const trigger = useCallback(async () => {
+    if (!channel.sample || channel.muted) return;
+    const AudioEngine = require('../../modules/audio-engine');
+    try {
+      await AudioEngine.triggerSample(channel.sample.id);
+    } catch (err) {
+      console.error(`Failed to trigger native sample for channel ${channel.id}:`, err);
+    }
+  }, [channel.sample, channel.muted]);
+
+  const stop = useCallback(async () => {
+    // Native engine handles stopping
+  }, []);
+
+  const preview = useCallback(async () => {
+    await trigger();
+  }, [trigger]);
+
+  return { trigger, stop, preview };
+}
+
+// ──────────────────────────────────────────────────
+// Web/Android: existing expo-av implementation
+// ──────────────────────────────────────────────────
+function useChannelPlayerJS(channel: Channel) {
   const soundRef = useRef<Audio.Sound | null>(null);
   const isLoadedRef = useRef(false);
   const currentUriRef = useRef<string | null>(null);
 
-  // Load sound when sample changes
   useEffect(() => {
     const loadSound = async () => {
-      // Unload previous sound
       if (soundRef.current) {
         try {
           await soundRef.current.unloadAsync();
@@ -24,7 +90,6 @@ export function useChannelPlayer(channel: Channel) {
         return;
       }
 
-      // Skip if same URI already loaded
       if (currentUriRef.current === channel.sample.uri && isLoadedRef.current) {
         return;
       }
@@ -58,7 +123,6 @@ export function useChannelPlayer(channel: Channel) {
     };
   }, [channel.sample?.uri]);
 
-  // Update playback settings when they change
   useEffect(() => {
     if (!soundRef.current || !isLoadedRef.current || !channel.sample) return;
 
@@ -79,11 +143,9 @@ export function useChannelPlayer(channel: Channel) {
     if (channel.muted) return;
 
     try {
-      const trimStartSec = (channel.sample.trimStartMs || 0) / 1000;
       await soundRef.current.setPositionAsync(channel.sample.trimStartMs || 0);
       await soundRef.current.playAsync();
 
-      // Schedule stop at trim end
       if (channel.sample.trimEndMs && channel.sample.trimEndMs < channel.sample.durationMs) {
         const playDuration =
           (channel.sample.trimEndMs - (channel.sample.trimStartMs || 0)) /
@@ -113,4 +175,16 @@ export function useChannelPlayer(channel: Channel) {
   }, [trigger]);
 
   return { trigger, stop, preview };
+}
+
+// ──────────────────────────────────────────────────
+// Exported hook: picks native vs JS based on platform
+// ──────────────────────────────────────────────────
+export function useChannelPlayer(channel: Channel) {
+  if (isNativeAvailable) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    return useChannelPlayerIOS(channel);
+  }
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  return useChannelPlayerJS(channel);
 }

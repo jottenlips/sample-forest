@@ -17,16 +17,22 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Sample Forest needs microphone access to record audio samples."
-      }
+      },
+      "bundleIdentifier": "com.anonymous.sampleforest"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1B4332"
       },
-      "permissions": ["RECORD_AUDIO"],
+      "permissions": [
+        "RECORD_AUDIO",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ],
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.anonymous.sampleforest"
     },
     "web": {
       "favicon": "./assets/favicon.png"

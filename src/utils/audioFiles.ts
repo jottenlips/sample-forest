@@ -1,6 +1,7 @@
 import { Platform } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import { Sample } from "../types";
+import { isNativeAvailable } from "../../modules/audio-engine";
 
 // On web we use blob URLs, on native we use expo-file-system
 async function saveSampleFileNative(
@@ -51,6 +52,8 @@ export async function deleteSampleFile(uri: string): Promise<void> {
 export async function pickAudioFile(): Promise<{
   uri: string;
   name: string;
+  durationMs?: number;
+  waveformData?: number[];
 } | null> {
   if (Platform.OS === "web") {
     // Use a file input on web
@@ -81,6 +84,26 @@ export async function pickAudioFile(): Promise<{
   if (result.canceled || !result.assets?.length) return null;
 
   const asset = result.assets[0];
+
+  // Native: use AudioEngine for accurate duration & waveform
+  if (isNativeAvailable) {
+    try {
+      const AudioEngine = require("../../modules/audio-engine");
+      const importResult = await AudioEngine.importAudioFile(
+        asset.uri,
+        asset.name,
+      );
+      return {
+        uri: importResult.uri,
+        name: asset.name,
+        durationMs: importResult.durationMs,
+        waveformData: importResult.waveformData,
+      };
+    } catch (err) {
+      console.error("Native import failed, falling back:", err);
+    }
+  }
+
   const savedUri = await saveSampleFile(asset.uri, asset.name);
   return { uri: savedUri, name: asset.name };
 }
@@ -112,6 +135,7 @@ export function createSampleFromFile(
   uri: string,
   name: string,
   durationMs: number,
+  waveformData?: number[],
 ): Sample {
   return {
     id: `sample_${Date.now()}`,
@@ -123,6 +147,6 @@ export function createSampleFromFile(
     playbackRate: 1.0,
     preservePitch: true,
     volume: 1.0,
-    waveformData: generateWaveformData(),
+    waveformData: waveformData ?? generateWaveformData(),
   };
 }

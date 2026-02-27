@@ -10,17 +10,48 @@ interface TripletGridProps {
   channelId: number;
 }
 
-export function TripletGrid({ channelId }: TripletGridProps) {
-  const channel = useAppStore((s) => s.channels.find((c) => c.id === channelId));
+const TripletButton = React.memo(function TripletButton({
+  active,
+  isCurrent,
+  isGroupStart,
+  onPress,
+}: {
+  active: boolean;
+  isCurrent: boolean;
+  isGroupStart: boolean;
+  onPress: () => void;
+}) {
+  const bgColor =
+    isCurrent && active
+      ? colors.seafoam
+      : isCurrent
+        ? colors.fern
+        : active
+          ? '#7B68EE'
+          : isGroupStart
+            ? '#2A3F55'
+            : '#1E2D3D';
+
+  return (
+    <TouchableOpacity
+      style={[styles.step, { backgroundColor: bgColor }]}
+      onPress={onPress}
+      activeOpacity={0.6}
+    />
+  );
+});
+
+export const TripletGrid = React.memo(function TripletGrid({ channelId }: TripletGridProps) {
+  const tripletSteps = useAppStore((s) => s.channels.find((c) => c.id === channelId)?.tripletSteps);
   const currentTripletStep = useAppStore((s) => s.sequencer.currentTripletStep);
   const isPlaying = useAppStore((s) => s.sequencer.isPlaying);
   const stepCount = useAppStore((s) => s.sequencer.stepCount);
   const toggleTripletStep = useAppStore((s) => s.toggleTripletStep);
 
-  if (!channel) return null;
+  if (!tripletSteps) return null;
 
   const tripletCount = getTripletStepCount(stepCount);
-  const tripletSteps = channel.tripletSteps.slice(0, tripletCount);
+  const visibleSteps = tripletSteps.slice(0, tripletCount);
 
   const rows: number[][] = [];
   for (let i = 0; i < tripletCount; i += TRIPLETS_PER_ROW) {
@@ -35,30 +66,15 @@ export function TripletGrid({ channelId }: TripletGridProps) {
       <View style={styles.container}>
         {rows.map((row, rowIdx) => (
           <View key={rowIdx} style={styles.row}>
-            {row.map((i) => {
-              const active = tripletSteps[i];
-              const isCurrent = isPlaying && currentTripletStep === i;
-              const isGroupStart = i % 3 === 0;
-              const bgColor =
-                isCurrent && active
-                  ? colors.seafoam
-                  : isCurrent
-                    ? colors.fern
-                    : active
-                      ? '#7B68EE'
-                      : isGroupStart
-                        ? '#2A3F55'
-                        : '#1E2D3D';
-
-              return (
-                <TouchableOpacity
-                  key={i}
-                  style={[styles.step, { backgroundColor: bgColor }]}
-                  onPress={() => toggleTripletStep(channelId, i)}
-                  activeOpacity={0.6}
-                />
-              );
-            })}
+            {row.map((i) => (
+              <TripletButton
+                key={i}
+                active={visibleSteps[i]}
+                isCurrent={isPlaying && currentTripletStep === i}
+                isGroupStart={i % 3 === 0}
+                onPress={() => toggleTripletStep(channelId, i)}
+              />
+            ))}
             {row.length < TRIPLETS_PER_ROW &&
               Array.from({ length: TRIPLETS_PER_ROW - row.length }, (_, j) => (
                 <View key={`spacer-${j}`} style={styles.stepSpacer} />
@@ -68,7 +84,7 @@ export function TripletGrid({ channelId }: TripletGridProps) {
       </View>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   wrapper: {

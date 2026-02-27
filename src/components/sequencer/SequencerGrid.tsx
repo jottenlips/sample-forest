@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback } from 'react';
 import { View, StyleSheet } from 'react-native';
 import { StepButton } from './StepButton';
 import { useAppStore } from '../../state/useAppStore';
@@ -9,18 +9,18 @@ interface SequencerGridProps {
   channelId: number;
 }
 
-export function SequencerGrid({ channelId }: SequencerGridProps) {
-  const channel = useAppStore((s) => s.channels.find((c) => c.id === channelId));
+export const SequencerGrid = React.memo(function SequencerGrid({ channelId }: SequencerGridProps) {
+  const steps = useAppStore((s) => s.channels.find((c) => c.id === channelId)?.steps);
   const currentStep = useAppStore((s) => s.sequencer.currentStep);
   const isPlaying = useAppStore((s) => s.sequencer.isPlaying);
   const toggleStep = useAppStore((s) => s.toggleStep);
 
-  if (!channel) return null;
+  if (!steps) return null;
 
   const rows: number[][] = [];
-  for (let i = 0; i < channel.steps.length; i += STEPS_PER_ROW) {
+  for (let i = 0; i < steps.length; i += STEPS_PER_ROW) {
     rows.push(
-      Array.from({ length: Math.min(STEPS_PER_ROW, channel.steps.length - i) }, (_, j) => i + j)
+      Array.from({ length: Math.min(STEPS_PER_ROW, steps.length - i) }, (_, j) => i + j)
     );
   }
 
@@ -31,7 +31,7 @@ export function SequencerGrid({ channelId }: SequencerGridProps) {
           {row.map((i) => (
             <StepButton
               key={i}
-              active={channel.steps[i]}
+              active={steps[i]}
               isCurrentStep={isPlaying && currentStep === i}
               isDownbeat={i % 4 === 0}
               onPress={() => toggleStep(channelId, i)}
@@ -45,7 +45,7 @@ export function SequencerGrid({ channelId }: SequencerGridProps) {
       ))}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {

@@ -2,7 +2,7 @@
  * Encode a slice of an AudioBuffer as a WAV blob.
  */
 export function encodeWav(
-  audioBuffer: AudioBuffer,
+  audioBuffer: any,
   startSample: number,
   endSample: number,
 ): Blob {

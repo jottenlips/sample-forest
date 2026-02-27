@@ -1,17 +1,17 @@
 import { Scene, Channel, getTripletStepCount } from '../types';
-import { encodeWav } from './wavEncoder';
+export { sceneDuration, type ExportMode, type SongScene } from './songTypes';
+import { sceneDuration } from './songTypes';
+import type { ExportMode, SongScene } from './songTypes';
 
 // ── Types ──────────────────────────────────────────────────────────
 
 interface PlayEvent {
   channelId: number;
   startTime: number;
-  buffer: AudioBuffer;
+  buffer: any;
   volume: number;
   rate: number;
 }
-
-export type ExportMode = 'mix' | 'stems' | 'stem';
 
 export interface RenderOptions {
   mode: ExportMode;
@@ -20,18 +20,17 @@ export interface RenderOptions {
   onProgress?: (message: string) => void;
 }
 
-export interface SongScene {
-  sceneId: number;
-  scene: Scene;
-}
+// ── Web-only functions below ──────────────────────────────────────
+// These use Web Audio API (AudioContext, OfflineAudioContext, etc.)
+// and must ONLY be called on web, never on iOS native.
 
 // ── Decode all unique samples ──────────────────────────────────────
 
 export async function decodeAllSamples(
   channels: Channel[],
-  audioCtx: BaseAudioContext,
-): Promise<Map<string, AudioBuffer>> {
-  const buffers = new Map<string, AudioBuffer>();
+  audioCtx: any,
+): Promise<Map<string, any>> {
+  const buffers = new Map<string, any>();
   const pending: Promise<void>[] = [];
 
   for (const ch of channels) {
@@ -55,11 +54,11 @@ export async function decodeAllSamples(
 // ── Trim an AudioBuffer ────────────────────────────────────────────
 
 function trimBuffer(
-  source: AudioBuffer,
+  source: any,
   trimStartMs: number,
   trimEndMs: number,
-  ctx: BaseAudioContext,
-): AudioBuffer {
+  ctx: any,
+): any {
   const sr = source.sampleRate;
   const startSample = Math.round((trimStartMs / 1000) * sr);
   const endSample = Math.round((trimEndMs / 1000) * sr);
@@ -95,8 +94,8 @@ function getAudibleChannelIds(channels: Channel[]): Set<number> {
 export function renderScene(
   scene: Scene,
   channels: Channel[],
-  sampleBuffers: Map<string, AudioBuffer>,
-  ctx: BaseAudioContext,
+  sampleBuffers: Map<string, any>,
+  ctx: any,
   offset: number,
 ): PlayEvent[] {
   const events: PlayEvent[] = [];
@@ -145,15 +144,9 @@ export function renderScene(
   return events;
 }
 
-// ── Calculate scene duration ───────────────────────────────────────
-
-export function sceneDuration(scene: Scene): number {
-  return scene.stepCount * (60 / scene.bpm / 4);
-}
-
 // ── Schedule events onto an OfflineAudioContext ────────────────────
 
-function scheduleEvents(events: PlayEvent[], ctx: OfflineAudioContext) {
+function scheduleEvents(events: PlayEvent[], ctx: any) {
   for (const ev of events) {
     const source = ctx.createBufferSource();
     source.buffer = ev.buffer;
@@ -168,16 +161,16 @@ function scheduleEvents(events: PlayEvent[], ctx: OfflineAudioContext) {
   }
 }
 
-// ── Render the entire song ─────────────────────────────────────────
+// ── Render the entire song (WEB ONLY) ────────────────────────────
 
 export async function renderSong(
   songScenes: SongScene[],
   channels: Channel[],
   options: RenderOptions,
-): Promise<Map<string, AudioBuffer>> {
+): Promise<Map<string, any>> {
   const sampleRate = options.sampleRate ?? 44100;
   const onProgress = options.onProgress ?? (() => {});
-  const results = new Map<string, AudioBuffer>();
+  const results = new Map<string, any>();
 
   if (songScenes.length === 0) return results;
 
@@ -191,7 +184,7 @@ export async function renderSong(
   const totalSamples = Math.ceil((totalDuration + tailSeconds) * sampleRate);
 
   // We need a temporary AudioContext to decode samples
-  const tempCtx = new AudioContext({ sampleRate });
+  const tempCtx = new (globalThis as any).AudioContext({ sampleRate });
 
   onProgress('Decoding samples...');
   const sampleBuffers = await decodeAllSamples(channels, tempCtx);
@@ -203,7 +196,7 @@ export async function renderSong(
         ? channels.filter((ch) => ch.id === options.channelId)
         : channels;
 
-    const offlineCtx = new OfflineAudioContext(2, totalSamples, sampleRate);
+    const offlineCtx = new (globalThis as any).OfflineAudioContext(2, totalSamples, sampleRate);
 
     let offset = 0;
     for (let i = 0; i < songScenes.length; i++) {
@@ -227,7 +220,7 @@ export async function renderSong(
       const ch = channelsWithSamples[ci];
       onProgress(`Rendering stem ${ci + 1} of ${channelsWithSamples.length} (${ch.label})...`);
 
-      const offlineCtx = new OfflineAudioContext(2, totalSamples, sampleRate);
+      const offlineCtx = new (globalThis as any).OfflineAudioContext(2, totalSamples, sampleRate);
       let offset = 0;
       for (const ss of songScenes) {
         const events = renderScene(ss.scene, [ch], sampleBuffers, offlineCtx, offset);
@@ -243,9 +236,10 @@ export async function renderSong(
   return results;
 }
 
-// ── Download a WAV blob ────────────────────────────────────────────
+// ── Download a WAV blob (WEB ONLY) ──────────────────────────────
 
-export function downloadWav(audioBuffer: AudioBuffer, filename: string) {
+export function downloadWav(audioBuffer: any, filename: string) {
+  const { encodeWav } = require('./wavEncoder');
   const blob = encodeWav(audioBuffer, 0, audioBuffer.length);
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

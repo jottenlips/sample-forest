@@ -8,14 +8,17 @@ import {
   Dimensions,
   ActivityIndicator,
   ScrollView,
+  Platform,
 } from "react-native";
 import Svg, { Rect, Line } from "react-native-svg";
 import Slider from "@react-native-community/slider";
 import { Audio } from "expo-av";
+import * as DocumentPicker from "expo-document-picker";
 import { colors } from "../theme/colors";
 import { useAppStore } from "../state/useAppStore";
 import { encodeWav } from "../utils/wavEncoder";
 import { detectBpm, beatLengthSec } from "../utils/bpmDetect";
+import { saveSampleFile, generateWaveformData } from "../utils/audioFiles";
 
 const NUM_CHOPS = 8;
 
@@ -99,33 +102,86 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
   );
 
   const handlePickFile = useCallback(async () => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept =
-      ".wav,.mp3,audio/wav,audio/x-wav,audio/mpeg,audio/mp3,audio/*";
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
+    if (Platform.OS === "web") {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept =
+        ".wav,.mp3,audio/wav,audio/x-wav,audio/mpeg,audio/mp3,audio/*";
+      input.onchange = async () => {
+        const file = input.files?.[0];
+        if (!file) return;
 
-      setLoading(true);
-      setLoadingMessage("Decoding audio...");
-      setError("");
+        setLoading(true);
+        setLoadingMessage("Decoding audio...");
+        setError("");
 
+        try {
+          const arrayBuffer = await file.arrayBuffer();
+          const audioCtx = new AudioContext();
+          setLoadingMessage("Analyzing tempo...");
+          const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+          processAudioBuffer(decoded, file.name);
+        } catch (e) {
+          console.error("Failed to decode audio:", e);
+          setError("Failed to decode audio file");
+        } finally {
+          setLoading(false);
+        }
+      };
+      input.click();
+    } else {
+      // Native: use DocumentPicker + expo-av for decoding
       try {
-        const arrayBuffer = await file.arrayBuffer();
-        const audioCtx = new AudioContext();
-        setLoadingMessage("Analyzing tempo...");
-        const decoded = await audioCtx.decodeAudioData(arrayBuffer);
-        processAudioBuffer(decoded, file.name);
+        const result = await DocumentPicker.getDocumentAsync({
+          type: "audio/*",
+          copyToCacheDirectory: true,
+        });
+        if (result.canceled || !result.assets?.length) return;
+
+        const asset = result.assets[0];
+        setLoading(true);
+        setLoadingMessage("Copying file...");
+        setError("");
+
+        const savedUri = await saveSampleFile(asset.uri, asset.name);
+
+        setLoadingMessage("Decoding audio...");
+
+        // Load with expo-av to get duration
+        const { sound } = await Audio.Sound.createAsync({ uri: savedUri });
+        const status = await sound.getStatusAsync();
+        const durationMs = status.isLoaded ? status.durationMillis || 3000 : 3000;
+        const durationSec = durationMs / 1000;
+        await sound.unloadAsync();
+
+        // Create a minimal "AudioBuffer-like" object for native
+        // ChopScreen uses AudioBuffer.duration, .sampleRate, .getChannelData, .length
+        // On native we fake it with the info we have
+        const fakeSampleRate = 44100;
+        const fakeLength = Math.floor(durationSec * fakeSampleRate);
+        const fakeChannelData = new Float32Array(fakeLength);
+        // Generate a simple waveform approximation (silence - will show flat)
+        for (let i = 0; i < fakeLength; i++) {
+          fakeChannelData[i] = Math.random() * 0.5;
+        }
+        const fakeBuffer = {
+          duration: durationSec,
+          sampleRate: fakeSampleRate,
+          length: fakeLength,
+          getChannelData: () => fakeChannelData,
+          _nativeUri: savedUri,
+          _isNative: true,
+        } as any;
+
+        processAudioBuffer(fakeBuffer, asset.name);
       } catch (e) {
-        console.error("Failed to decode audio:", e);
-        setError("Failed to decode audio file");
+        console.error("Failed to pick/decode audio:", e);
+        setError("Failed to load audio file");
       } finally {
         setLoading(false);
       }
-    };
-    input.click();
-  }, []);
+    }
+  }, [processAudioBuffer]);
 
   const handleReshuffle = useCallback(() => {
     if (!audioBuffer) return;
@@ -159,21 +215,54 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
         const sampleRate = audioBuffer.sampleRate;
         const startSec = chopStarts[idx];
         const thisChopLen = chopLengths.get(idx) ?? chopLen;
-        const sliceStart = Math.floor(startSec * sampleRate);
-        const sliceEnd = Math.min(
-          sliceStart + Math.floor(thisChopLen * sampleRate),
-          audioBuffer.length,
-        );
+        const isNative = (audioBuffer as any)._isNative;
+        const nativeUri = (audioBuffer as any)._nativeUri;
 
-        const wavBlob = encodeWav(audioBuffer, sliceStart, sliceEnd);
-        const blobUrl = URL.createObjectURL(wavBlob);
+        let uri: string;
+        let positionMs = 0;
+        let playDurationMs = thisChopLen * 1000;
+
+        if (isNative && nativeUri) {
+          // On native: play the full file from the chop start position
+          uri = nativeUri;
+          positionMs = startSec * 1000;
+        } else {
+          // On web: slice into WAV blob
+          const sliceStart = Math.floor(startSec * sampleRate);
+          const sliceEnd = Math.min(
+            sliceStart + Math.floor(thisChopLen * sampleRate),
+            audioBuffer.length,
+          );
+          const wavBlob = encodeWav(audioBuffer, sliceStart, sliceEnd);
+          uri = URL.createObjectURL(wavBlob);
+        }
 
         const { sound } = await Audio.Sound.createAsync(
-          { uri: blobUrl },
-          { shouldPlay: true },
+          { uri },
+          { shouldPlay: false },
         );
+
+        if (positionMs > 0) {
+          await sound.setPositionAsync(positionMs);
+        }
+        await sound.playAsync();
+
         previewSoundRef.current = sound;
         setPreviewingIdx(idx);
+
+        // Auto-stop after chop duration (for native where we play from position)
+        if (isNative) {
+          setTimeout(async () => {
+            try {
+              if (previewSoundRef.current === sound) {
+                await sound.pauseAsync();
+                await sound.unloadAsync();
+                previewSoundRef.current = null;
+                setPreviewingIdx(null);
+              }
+            } catch {}
+          }, playDurationMs);
+        }
 
         sound.setOnPlaybackStatusUpdate((status) => {
           if (status.isLoaded && status.didJustFinish) {
@@ -206,6 +295,8 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
 
     try {
       const sampleRate = audioBuffer.sampleRate;
+      const isNative = (audioBuffer as any)._isNative;
+      const nativeUri = (audioBuffer as any)._nativeUri;
 
       for (let i = 0; i < chopStarts.length; i++) {
         const startSec = chopStarts[i];
@@ -218,28 +309,39 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
 
         const effectiveBpm = 60 / thisChopLen;
         const rate = matchTempo ? sequencerBpm / effectiveBpm : 1.0;
-
-        const wavBlob = encodeWav(audioBuffer, sliceStart, sliceEnd);
-        const blobUrl = URL.createObjectURL(wavBlob);
         const durationMs = ((sliceEnd - sliceStart) / sampleRate) * 1000;
+        const trimStartMs = startSec * 1000;
+        const trimEndMs = trimStartMs + durationMs;
 
-        // Generate waveform for this slice
-        const channelData = audioBuffer.getChannelData(0);
-        const points = 50;
-        const blockSize = Math.max(
-          1,
-          Math.floor((sliceEnd - sliceStart) / points),
-        );
-        const sliceWaveform: number[] = [];
-        for (let p = 0; p < points; p++) {
-          let sum = 0;
-          for (let j = 0; j < blockSize; j++) {
-            sum += Math.abs(channelData[sliceStart + p * blockSize + j]);
+        let uri: string;
+        let normalizedWaveform: number[];
+
+        if (isNative && nativeUri) {
+          // On native: use the full file URI with trim points
+          uri = nativeUri;
+          normalizedWaveform = generateWaveformData(50);
+        } else {
+          // On web: slice AudioBuffer into WAV blob
+          const wavBlob = encodeWav(audioBuffer, sliceStart, sliceEnd);
+          uri = URL.createObjectURL(wavBlob);
+
+          const channelData = audioBuffer.getChannelData(0);
+          const points = 50;
+          const blockSize = Math.max(
+            1,
+            Math.floor((sliceEnd - sliceStart) / points),
+          );
+          const sliceWaveform: number[] = [];
+          for (let p = 0; p < points; p++) {
+            let sum = 0;
+            for (let j = 0; j < blockSize; j++) {
+              sum += Math.abs(channelData[sliceStart + p * blockSize + j]);
+            }
+            sliceWaveform.push(sum / blockSize);
           }
-          sliceWaveform.push(sum / blockSize);
+          const wMax = Math.max(...sliceWaveform, 0.01);
+          normalizedWaveform = sliceWaveform.map((v) => v / wMax);
         }
-        const wMax = Math.max(...sliceWaveform, 0.01);
-        const normalizedWaveform = sliceWaveform.map((v) => v / wMax);
 
         const label = `Chop ${i + 1}`;
         addChannel(label);
@@ -249,11 +351,11 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
 
         loadSample(newChannel.id, {
           id: `sample_${Date.now()}_${i}`,
-          uri: blobUrl,
+          uri,
           name: `${fileName} [${startSec.toFixed(2)}s]`,
-          durationMs,
-          trimStartMs: 0,
-          trimEndMs: durationMs,
+          durationMs: isNative ? audioBuffer.duration * 1000 : durationMs,
+          trimStartMs: isNative ? trimStartMs : 0,
+          trimEndMs: isNative ? trimEndMs : durationMs,
           playbackRate: rate,
           preservePitch: matchTempo,
           volume: 1.0,
