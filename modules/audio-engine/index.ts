@@ -97,3 +97,25 @@ export function previewSample(channelId: number): void {
 export function onStepChange(listener: (event: StepChangeEvent) => void): EventSubscription {
   return getEmitter().addListener('onStepChange', listener);
 }
+
+// Audio decoding
+interface DecodeResult {
+  sampleRate: number;
+  channels: number;
+  frames: number;
+  duration: number;
+  channelData: string[];
+}
+
+export async function decodeNativeAudio(uri: string): Promise<DecodeResult> {
+  return getModule().decode(uri);
+}
+
+export function base64ToFloat32Array(base64: string): Float32Array {
+  const binaryStr = atob(base64);
+  const bytes = new Uint8Array(binaryStr.length);
+  for (let i = 0; i < binaryStr.length; i++) {
+    bytes[i] = binaryStr.charCodeAt(i);
+  }
+  return new Float32Array(bytes.buffer);
+}

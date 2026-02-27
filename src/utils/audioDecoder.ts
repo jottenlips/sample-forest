@@ -31,7 +31,7 @@ async function decodeWeb(uri: string): Promise<DecodedAudio> {
 }
 
 async function decodeNativeModule(uri: string): Promise<DecodedAudio> {
-  const { decodeNativeAudio, base64ToFloat32Array } = await import('../../modules/audio-decoder');
+  const { decodeNativeAudio, base64ToFloat32Array } = await import('../../modules/audio-engine');
   const result = await decodeNativeAudio(uri);
 
   const channels: Float32Array[] = result.channelData.map(base64ToFloat32Array);
