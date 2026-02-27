@@ -6,17 +6,24 @@ import {
   ScrollView,
   StyleSheet,
   ActivityIndicator,
+  Platform,
+  Share,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { useAppStore } from '../state/useAppStore';
 import {
-  renderSong,
-  downloadWav,
   sceneDuration,
   ExportMode,
   SongScene,
-} from '../utils/offlineRenderer';
+} from '../utils/songTypes';
+import {
+  isNativeAvailable,
+  exportSong,
+  triggerSample,
+  loadSample,
+} from '../../modules/audio-engine';
+import type { ExportParams, ExportSceneConfig } from '../../modules/audio-engine';
 
 interface ExportScreenProps {
   onClose: () => void;
@@ -32,8 +39,8 @@ export function ExportScreen({ onClose }: ExportScreenProps) {
   const [isRendering, setIsRendering] = useState(false);
   const [progressMsg, setProgressMsg] = useState('');
   const [isPreviewing, setIsPreviewing] = useState(false);
-  const previewCtxRef = useRef<AudioContext | null>(null);
-  const previewSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const previewCtxRef = useRef<any>(null);
+  const previewSourceRef = useRef<any>(null);
 
   const channelsWithSamples = channels.filter((ch) => ch.sample);
 
@@ -90,10 +97,33 @@ export function ExportScreen({ onClose }: ExportScreenProps) {
     }
     if (songScenes.length === 0) return;
 
+    if (isNativeAvailable) {
+      // On iOS native, export a mix and play it via the native engine
+      setIsPreviewing(true);
+      setProgressMsg('Rendering preview...');
+      try {
+        const params = buildNativeExportParams('mix');
+        const results = await exportSong(params);
+        if (results.length > 0) {
+          const previewId = '__preview__';
+          await loadSample(previewId, results[0].uri);
+          await triggerSample(previewId);
+        }
+        setProgressMsg('');
+      } catch (err) {
+        console.error('Preview error:', err);
+        setProgressMsg('Preview failed');
+      }
+      setIsPreviewing(false);
+      return;
+    }
+
+    // Web fallback — lazy-load web-only renderer
     setIsPreviewing(true);
     setProgressMsg('Rendering preview...');
 
     try {
+      const { renderSong } = require('../utils/offlineRenderer');
       const results = await renderSong(songScenes, channels, {
         mode: 'mix',
         onProgress: setProgressMsg,
@@ -102,7 +132,7 @@ export function ExportScreen({ onClose }: ExportScreenProps) {
       const buf = results.get('mix');
       if (!buf) { setIsPreviewing(false); return; }
 
-      const ctx = new AudioContext();
+      const ctx = new (globalThis as any).AudioContext();
       previewCtxRef.current = ctx;
       const source = ctx.createBufferSource();
       source.buffer = buf;
@@ -121,6 +151,38 @@ export function ExportScreen({ onClose }: ExportScreenProps) {
     setProgressMsg('');
   };
 
+  // ── Build native export params ──────────────────────────────────
+
+  const buildNativeExportParams = (mode: ExportMode): ExportParams => {
+    const nativeScenes: ExportSceneConfig[] = songScenes.map((ss) => ({
+      bpm: ss.scene.bpm,
+      stepCount: ss.scene.stepCount,
+      swing: ss.scene.swing,
+      channelSteps: ss.scene.channelSteps,
+      channelTripletSteps: ss.scene.channelTripletSteps,
+    }));
+
+    const nativeChannels = channels.map((ch) => ({
+      channelId: ch.id,
+      sampleId: ch.sample?.id ?? '',
+      volume: ch.sample ? ch.sample.volume * ch.volume : ch.volume,
+      muted: ch.muted,
+      solo: ch.solo,
+      steps: ch.steps,
+      tripletSteps: ch.tripletSteps,
+      trimStartMs: ch.sample?.trimStartMs ?? 0,
+      trimEndMs: ch.sample?.trimEndMs ?? 0,
+      playbackRate: ch.sample?.playbackRate ?? 1.0,
+    }));
+
+    return {
+      scenes: nativeScenes,
+      channels: nativeChannels,
+      mode,
+      channelId: selectedChannelId ?? undefined,
+    };
+  };
+
   // ── Export ─────────────────────────────────────────────────────
 
   const handleExport = async () => {
@@ -131,18 +193,49 @@ export function ExportScreen({ onClose }: ExportScreenProps) {
     setProgressMsg('Starting export...');
 
     try {
-      const results = await renderSong(songScenes, channels, {
-        mode: exportMode,
-        channelId: selectedChannelId ?? undefined,
-        onProgress: setProgressMsg,
-      });
+      if (isNativeAvailable) {
+        // iOS native export
+        setProgressMsg('Rendering...');
+        const params = buildNativeExportParams(exportMode);
+        const results = await exportSong(params);
 
-      setProgressMsg('Encoding WAV...');
-      for (const [label, buffer] of results) {
-        const safeName = label.replace(/[^a-zA-Z0-9_-]/g, '_');
-        downloadWav(buffer, `${safeName}.wav`);
+        if (results.length === 0) {
+          setProgressMsg('No audio to export');
+          return;
+        }
+
+        setProgressMsg('Done! Sharing...');
+
+        // Share the file(s) via iOS share sheet
+        if (results.length === 1) {
+          await Share.share({
+            url: results[0].uri,
+          });
+        } else {
+          // For multiple stems, share them one at a time
+          for (const result of results) {
+            await Share.share({
+              url: result.uri,
+            });
+          }
+        }
+        setProgressMsg('Exported!');
+      } else {
+        // Web export — lazy-load web-only renderer
+        const { renderSong, downloadWav } = require('../utils/offlineRenderer');
+        const results = await renderSong(songScenes, channels, {
+          mode: exportMode,
+          channelId: selectedChannelId ?? undefined,
+          onProgress: setProgressMsg,
+        });
+
+        setProgressMsg('Encoding WAV...');
+        for (const [label, buffer] of results) {
+          const safeName = label.replace(/[^a-zA-Z0-9_-]/g, '_');
+          downloadWav(buffer, `${safeName}.wav`);
+        }
+        setProgressMsg('Done!');
       }
-      setProgressMsg('Done!');
     } catch (err) {
       console.error('Export error:', err);
       setProgressMsg('Export failed');

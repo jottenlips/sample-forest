@@ -59,3 +59,34 @@ export interface StepChangeEvent {
   currentStep: number;
   currentTripletStep: number;
 }
+
+export interface ExportSceneConfig {
+  bpm: number;
+  stepCount: number;
+  swing: number;
+  channelSteps: Record<number, boolean[]>;
+  channelTripletSteps: Record<number, boolean[]>;
+}
+
+export interface ExportParams {
+  scenes: ExportSceneConfig[];
+  channels: {
+    channelId: number;
+    sampleId: string;
+    volume: number;
+    muted: boolean;
+    solo: boolean;
+    steps: boolean[];
+    tripletSteps: boolean[];
+    trimStartMs: number;
+    trimEndMs: number;
+    playbackRate: number;
+  }[];
+  mode: 'mix' | 'stems' | 'stem';
+  channelId?: number;
+}
+
+export interface ExportResult {
+  label: string;
+  uri: string;
+}

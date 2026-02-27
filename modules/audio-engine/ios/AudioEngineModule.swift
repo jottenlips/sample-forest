@@ -5,6 +5,7 @@ public class AudioEngineModule: Module {
   private let bufferPool = AudioBufferPool()
   private let synthEngine = SynthEngine()
   private let audioFileProcessor = AudioFileProcessor()
+  private lazy var offlineRenderer = OfflineRenderer(bufferPool: bufferPool)
   private lazy var sequencerEngine = SequencerEngine(bufferPool: bufferPool) { [weak self] step, tripletStep in
     self?.sendEvent("onStepChange", [
       "currentStep": step,
@@ -51,6 +52,14 @@ public class AudioEngineModule: Module {
     AsyncFunction("importAudioFile") { (sourceUri: String, fileName: String) -> [String: Any] in
       let result = try self.audioFileProcessor.importFile(sourceUri: sourceUri, fileName: fileName)
       return result
+    }
+
+    AsyncFunction("exportSong") { (params: [String: Any]) -> [[String: Any]] in
+      let scenes = params["scenes"] as? [[String: Any]] ?? []
+      let channels = params["channels"] as? [[String: Any]] ?? []
+      let mode = params["mode"] as? String ?? "mix"
+      let channelId = params["channelId"] as? Int
+      return try self.offlineRenderer.render(scenes: scenes, channels: channels, mode: mode, channelId: channelId)
     }
   }
 }

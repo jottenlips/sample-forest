@@ -5,6 +5,8 @@ import type {
   SynthResult,
   ImportResult,
   StepChangeEvent,
+  ExportParams,
+  ExportResult,
 } from './src/AudioEngineModule.types';
 
 export type {
@@ -16,6 +18,9 @@ export type {
   SynthResult,
   ImportResult,
   StepChangeEvent,
+  ExportParams,
+  ExportSceneConfig,
+  ExportResult,
 } from './src/AudioEngineModule.types';
 
 const isIOS = Platform.OS === 'ios';
@@ -86,6 +91,11 @@ export async function importAudioFile(
 ): Promise<ImportResult> {
   if (!isNativeAvailable) return { uri: '', durationMs: 0, waveformData: [] };
   return NativeAudioEngine.importAudioFile(sourceUri, fileName);
+}
+
+export async function exportSong(params: ExportParams): Promise<ExportResult[]> {
+  if (!isNativeAvailable) return [];
+  return NativeAudioEngine.exportSong(params);
 }
 
 export function addStepChangeListener(
