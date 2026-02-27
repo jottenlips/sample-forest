@@ -1,16 +1,119 @@
 import { useRef, useCallback, useEffect } from 'react';
+import { Platform } from 'react-native';
 import { useAppStore } from '../state/useAppStore';
 import { getTripletStepCount } from '../types';
+import { isNativeAvailable } from '../../modules/audio-engine';
 
 type TriggerCallback = (channelId: number) => void;
 
-export function useSequencer(triggerCallbacks: Map<number, TriggerCallback>) {
+// ──────────────────────────────────────────────────
+// iOS: Native AVAudioEngine sequencer via Expo Module
+// ──────────────────────────────────────────────────
+function useSequencerIOS() {
+  const { sequencer, channels, setCurrentStep, setPlaying } = useAppStore();
+  const setCurrentTripletStep = useAppStore((s) => s.setCurrentTripletStep);
+  const punchIn = useAppStore((s) => s.punchIn);
+  const repeatBeatOrigin = useAppStore((s) => s.repeatBeatOrigin);
+  const listenerRef = useRef<{ remove: () => void } | null>(null);
+  const isStartedRef = useRef(false);
+
+  // Build native config from current state
+  const buildConfig = useCallback(() => {
+    const AudioEngine = require('../../modules/audio-engine');
+    const state = useAppStore.getState();
+    return {
+      bpm: state.sequencer.bpm,
+      stepCount: state.sequencer.stepCount,
+      swing: state.sequencer.swing,
+      punchIn: state.punchIn ?? null,
+      repeatBeatOrigin: state.repeatBeatOrigin ?? null,
+      channels: state.channels.map((ch) => ({
+        channelId: ch.id,
+        sampleId: ch.sample?.id ?? '',
+        volume: ch.sample ? ch.sample.volume * ch.volume : ch.volume,
+        muted: ch.muted,
+        solo: ch.solo,
+        steps: ch.steps,
+        tripletSteps: ch.tripletSteps,
+        trimStartMs: ch.sample?.trimStartMs ?? 0,
+        trimEndMs: ch.sample?.trimEndMs ?? 0,
+        playbackRate: ch.sample?.playbackRate ?? 1.0,
+      })),
+    };
+  }, []);
+
+  const start = useCallback(() => {
+    const AudioEngine = require('../../modules/audio-engine');
+    if (isStartedRef.current) return;
+    isStartedRef.current = true;
+    setPlaying(true);
+
+    // Listen for step changes from native
+    if (!listenerRef.current) {
+      listenerRef.current = AudioEngine.addStepChangeListener(
+        (event: { currentStep: number; currentTripletStep: number }) => {
+          setCurrentStep(event.currentStep);
+          setCurrentTripletStep(event.currentTripletStep);
+        },
+      );
+    }
+
+    const config = buildConfig();
+    AudioEngine.startSequencer(config);
+  }, [buildConfig, setPlaying, setCurrentStep, setCurrentTripletStep]);
+
+  const stop = useCallback(() => {
+    const AudioEngine = require('../../modules/audio-engine');
+    isStartedRef.current = false;
+    AudioEngine.stopSequencer();
+    setPlaying(false);
+    setCurrentStep(0);
+    setCurrentTripletStep(0);
+  }, [setPlaying, setCurrentStep, setCurrentTripletStep]);
+
+  // Hot-update config when relevant state changes during playback
+  useEffect(() => {
+    if (!isStartedRef.current) return;
+    const AudioEngine = require('../../modules/audio-engine');
+    const config = buildConfig();
+    AudioEngine.updateSequencerConfig(config);
+  }, [
+    sequencer.bpm,
+    sequencer.swing,
+    sequencer.stepCount,
+    channels,
+    punchIn,
+    repeatBeatOrigin,
+    buildConfig,
+  ]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (listenerRef.current) {
+        listenerRef.current.remove();
+        listenerRef.current = null;
+      }
+      if (isStartedRef.current) {
+        const AudioEngine = require('../../modules/audio-engine');
+        AudioEngine.stopSequencer();
+        isStartedRef.current = false;
+      }
+    };
+  }, []);
+
+  return { start, stop, isPlaying: sequencer.isPlaying };
+}
+
+// ──────────────────────────────────────────────────
+// Web/Android: existing JS setInterval implementation
+// ──────────────────────────────────────────────────
+function useSequencerJS(triggerCallbacks: Map<number, TriggerCallback>) {
   const { sequencer, channels, advanceStep, setCurrentStep, setPlaying } = useAppStore();
   const setCurrentTripletStep = useAppStore((s) => s.setCurrentTripletStep);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const nextStepTimeRef = useRef<number>(0);
   const currentStepRef = useRef<number>(0);
-  // Triplet scheduling runs on its own timeline
   const nextTripletTimeRef = useRef<number>(0);
   const currentTripletStepRef = useRef<number>(0);
 
@@ -21,8 +124,6 @@ export function useSequencer(triggerCallbacks: Map<number, TriggerCallback>) {
     return (60000 / sequencer.bpm) / 4;
   }, [sequencer.bpm]);
 
-  // Triplet duration: 3 triplet steps span the same time as 2 normal steps
-  // So triplet step duration = (2/3) * normal step duration
   const getTripletStepDurationMs = useCallback(() => {
     return ((60000 / sequencer.bpm) / 4) * (2 / 3);
   }, [sequencer.bpm]);
@@ -33,7 +134,6 @@ export function useSequencer(triggerCallbacks: Map<number, TriggerCallback>) {
       const hasSolo = state.channels.some((ch) => ch.solo);
       const punchIn = state.punchIn;
 
-      // Build a channel-id-to-sample mapping for swap effect
       let swapMap: Map<number, number> | null = null;
       if (punchIn === 'swap' && state.channels.length > 1) {
         const channelIds = state.channels.map((c) => c.id);
@@ -78,7 +178,6 @@ export function useSequencer(triggerCallbacks: Map<number, TriggerCallback>) {
       const hasSolo = state.channels.some((ch) => ch.solo);
       const punchIn = state.punchIn;
 
-      // Build swap map for triplet steps too
       let swapMap: Map<number, number> | null = null;
       if (punchIn === 'swap' && state.channels.length > 1) {
         const channelIds = state.channels.map((c) => c.id);
@@ -125,7 +224,6 @@ export function useSequencer(triggerCallbacks: Map<number, TriggerCallback>) {
     const punchIn = state.punchIn;
     const tripletCount = getTripletStepCount(state.sequencer.stepCount);
 
-    // Apply tempo effects
     let stepDuration = baseStepDuration;
     let tripletDuration = baseTripletDuration;
     if (punchIn === 'double') {
@@ -138,7 +236,6 @@ export function useSequencer(triggerCallbacks: Map<number, TriggerCallback>) {
 
     const swingAmount = (state.sequencer.swing / 100) * 0.75;
 
-    // Schedule normal steps
     while (nextStepTimeRef.current < now + LOOKAHEAD_MS) {
       let step = currentStepRef.current;
 
@@ -158,15 +255,12 @@ export function useSequencer(triggerCallbacks: Map<number, TriggerCallback>) {
         (currentStepRef.current + 1) % state.sequencer.stepCount;
     }
 
-    // Schedule triplet steps (independent timeline)
     while (nextTripletTimeRef.current < now + LOOKAHEAD_MS) {
       let tripletStep = currentTripletStepRef.current;
 
-      // Apply repeat effect: loop within the 3-triplet-step beat
       if (punchIn === 'repeat' && state.repeatBeatOrigin !== null) {
-        // Convert beat origin (in normal steps) to triplet steps: every 4 normal steps = 6 triplet steps
         const tripletBeatOrigin = Math.floor(state.repeatBeatOrigin / 4) * 6;
-        const tripletBeatLength = 6; // 6 triplet steps per beat
+        const tripletBeatLength = 6;
         tripletStep = tripletBeatOrigin + ((tripletStep - tripletBeatOrigin) % tripletBeatLength + tripletBeatLength) % tripletBeatLength;
       }
 
@@ -212,7 +306,6 @@ export function useSequencer(triggerCallbacks: Map<number, TriggerCallback>) {
     };
   }, []);
 
-  // Restart scheduler when BPM or punch-in changes during playback
   useEffect(() => {
     if (sequencer.isPlaying && intervalRef.current) {
       clearInterval(intervalRef.current);
@@ -223,4 +316,16 @@ export function useSequencer(triggerCallbacks: Map<number, TriggerCallback>) {
   }, [sequencer.bpm, schedulerTick, sequencer.isPlaying]);
 
   return { start, stop, isPlaying: sequencer.isPlaying };
+}
+
+// ──────────────────────────────────────────────────
+// Exported hook: picks native vs JS based on platform
+// ──────────────────────────────────────────────────
+export function useSequencer(triggerCallbacks?: Map<number, TriggerCallback>) {
+  if (isNativeAvailable) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    return useSequencerIOS();
+  }
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  return useSequencerJS(triggerCallbacks ?? new Map());
 }

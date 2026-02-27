@@ -80,8 +80,9 @@ export function ChannelRow({
       const file = await pickAudioFile();
       if (!file) return;
 
-      const durationMs = await getAudioDuration(file.uri);
-      const sample = createSampleFromFile(file.uri, file.name, durationMs);
+      // On iOS, pickAudioFile returns accurate duration & waveform from native
+      const durationMs = file.durationMs ?? await getAudioDuration(file.uri);
+      const sample = createSampleFromFile(file.uri, file.name, durationMs, file.waveformData);
       loadSample(channelId, sample);
     } catch (err) {
       console.error("Upload failed:", err);
