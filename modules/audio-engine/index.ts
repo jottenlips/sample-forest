@@ -1,43 +1,64 @@
-import { requireNativeModule } from 'expo-modules-core';
-import { EventEmitter, type EventSubscription } from 'expo-modules-core';
+import { NativeModule, requireNativeModule } from "expo";
+import { type EventSubscription } from "expo-modules-core";
 
 interface StepChangeEvent {
   step: number;
   tripletStep: number;
 }
 
-interface AudioEngineEvents {
+interface AudioEngineModuleEvents {
   onStepChange: (event: StepChangeEvent) => void;
+  [key: string]: (...args: any[]) => void;
 }
 
-let _module: any = null;
-function getModule() {
-  if (!_module) {
-    _module = requireNativeModule('AudioEngine');
-  }
-  return _module;
+declare class AudioEngineModuleType extends NativeModule<AudioEngineModuleEvents> {
+  play(): void;
+  stop(): void;
+  updateSequencer(bpm: number, stepCount: number, swing: number): void;
+  loadSample(
+    channelId: number,
+    uri: string,
+    trimStartMs: number,
+    trimEndMs: number,
+    playbackRate: number,
+    volume: number,
+    preservePitch: boolean,
+  ): Promise<void>;
+  unloadSample(channelId: number): void;
+  updatePattern(
+    channelId: number,
+    steps: boolean[],
+    tripletSteps: boolean[],
+  ): void;
+  setChannelMuted(id: number, muted: boolean): void;
+  setChannelSolo(id: number, solo: boolean): void;
+  setChannelVolume(id: number, volume: number): void;
+  setSampleVolume(id: number, volume: number): void;
+  addChannel(channelId: number): void;
+  removeChannel(channelId: number): void;
+  previewSample(channelId: number): void;
+  decode(uri: string): Promise<DecodeResult>;
 }
 
-let _emitter: InstanceType<typeof EventEmitter> | null = null;
-function getEmitter() {
-  if (!_emitter) {
-    _emitter = new EventEmitter(getModule());
-  }
-  return _emitter;
-}
+const AudioEngineModule =
+  requireNativeModule<AudioEngineModuleType>("AudioEngine");
 
 // Transport
 export function play(): void {
-  getModule().play();
+  AudioEngineModule.play();
 }
 
 export function stop(): void {
-  getModule().stop();
+  AudioEngineModule.stop();
 }
 
 // Sequencer params
-export function updateSequencer(bpm: number, stepCount: number, swing: number): void {
-  getModule().updateSequencer(bpm, stepCount, swing);
+export function updateSequencer(
+  bpm: number,
+  stepCount: number,
+  swing: number,
+): void {
+  AudioEngineModule.updateSequencer(bpm, stepCount, swing);
 }
 
 // Sample management
@@ -50,52 +71,66 @@ export async function loadSample(
   volume: number,
   preservePitch: boolean,
 ): Promise<void> {
-  return getModule().loadSample(channelId, uri, trimStartMs, trimEndMs, playbackRate, volume, preservePitch);
+  return AudioEngineModule.loadSample(
+    channelId,
+    uri,
+    trimStartMs,
+    trimEndMs,
+    playbackRate,
+    volume,
+    preservePitch,
+  );
 }
 
 export function unloadSample(channelId: number): void {
-  getModule().unloadSample(channelId);
+  AudioEngineModule.unloadSample(channelId);
 }
 
 // Pattern
-export function updatePattern(channelId: number, steps: boolean[], tripletSteps: boolean[]): void {
-  getModule().updatePattern(channelId, steps, tripletSteps);
+export function updatePattern(
+  channelId: number,
+  steps: boolean[],
+  tripletSteps: boolean[],
+): void {
+  AudioEngineModule.updatePattern(channelId, steps, tripletSteps);
 }
 
 // Channel state
 export function setChannelMuted(id: number, muted: boolean): void {
-  getModule().setChannelMuted(id, muted);
+  AudioEngineModule.setChannelMuted(id, muted);
 }
 
 export function setChannelSolo(id: number, solo: boolean): void {
-  getModule().setChannelSolo(id, solo);
+  AudioEngineModule.setChannelSolo(id, solo);
 }
 
 export function setChannelVolume(id: number, volume: number): void {
-  getModule().setChannelVolume(id, volume);
+  AudioEngineModule.setChannelVolume(id, volume);
 }
 
 export function setSampleVolume(id: number, volume: number): void {
-  getModule().setSampleVolume(id, volume);
+  AudioEngineModule.setSampleVolume(id, volume);
 }
 
 // Channel lifecycle
 export function addChannel(channelId: number): void {
-  getModule().addChannel(channelId);
+  AudioEngineModule.addChannel(channelId);
 }
 
 export function removeChannel(channelId: number): void {
-  getModule().removeChannel(channelId);
+  AudioEngineModule.removeChannel(channelId);
 }
 
 // Preview
 export function previewSample(channelId: number): void {
-  getModule().previewSample(channelId);
+  AudioEngineModule.previewSample(channelId);
 }
 
 // Events
-export function onStepChange(listener: (event: StepChangeEvent) => void): EventSubscription {
-  return getEmitter().addListener('onStepChange', listener);
+export function onStepChange(
+  listener: (event: StepChangeEvent) => void,
+): EventSubscription {
+  return AudioEngineModule.addListener("onStepChange", listener);
 }
 
 // Audio decoding
@@ -108,7 +143,7 @@ interface DecodeResult {
 }
 
 export async function decodeNativeAudio(uri: string): Promise<DecodeResult> {
-  return getModule().decode(uri);
+  return AudioEngineModule.decode(uri);
 }
 
 export function base64ToFloat32Array(base64: string): Float32Array {

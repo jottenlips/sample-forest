@@ -1,15 +1,23 @@
 Pod::Spec.new do |s|
   s.name           = 'AudioEngine'
   s.version        = '1.0.0'
-  s.summary        = 'Native AVAudioEngine sequencer for sample-accurate timing'
-  s.description    = 'Replaces JS-bridge audio scheduling with native AVAudioEngine for tight timing'
-  s.author         = ''
-  s.homepage       = 'https://github.com/example'
-  s.platforms      = { :ios => '15.1' }
+  s.summary        = 'Native AVAudioEngine sequencer'
+  s.description    = 'Sample-accurate native audio sequencing using AVAudioEngine'
+  s.author         = 'John Franke'
+  s.homepage       = 'https://docs.expo.dev/modules/'
+  s.platforms      = {
+    :ios => '15.1',
+    :tvos => '15.1'
+  }
   s.source         = { git: '' }
   s.static_framework = true
 
   s.dependency 'ExpoModulesCore'
 
-  s.source_files = '**/*.swift'
+  # Swift/Objective-C compatibility
+  s.pod_target_xcconfig = {
+    'DEFINES_MODULE' => 'YES',
+  }
+
+  s.source_files = "**/*.{h,m,mm,swift,hpp,cpp}"
 end
