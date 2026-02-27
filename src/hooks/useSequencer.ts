@@ -15,23 +15,20 @@ type TriggerCallback = (channelId: number) => void;
 // iOS: Native AVAudioEngine sequencer via Expo Module
 // ──────────────────────────────────────────────────
 function useSequencerIOS() {
-  // Use selectors to avoid subscribing to the entire store
   const bpm = useAppStore((s) => s.sequencer.bpm);
   const swing = useAppStore((s) => s.sequencer.swing);
   const stepCount = useAppStore((s) => s.sequencer.stepCount);
   const isPlaying = useAppStore((s) => s.sequencer.isPlaying);
   const punchIn = useAppStore((s) => s.punchIn);
   const repeatBeatOrigin = useAppStore((s) => s.repeatBeatOrigin);
-  const setCurrentStep = useAppStore((s) => s.setCurrentStep);
-  const setCurrentTripletStep = useAppStore((s) => s.setCurrentTripletStep);
   const setPlaying = useAppStore((s) => s.setPlaying);
 
   const listenerRef = useRef<{ remove: () => void } | null>(null);
   const isStartedRef = useRef(false);
-  // Track a version counter so the effect knows when channels changed
-  const channelVersionRef = useRef(0);
+  // Track config version to debounce updates
+  const configVersionRef = useRef(0);
 
-  // Build native config from current state snapshot (no subscriptions)
+  // Build native config from current state snapshot
   const buildConfig = useCallback(() => {
     const state = useAppStore.getState();
     return {
@@ -55,12 +52,24 @@ function useSequencerIOS() {
     };
   }, []);
 
-  // Subscribe to channel changes separately with a lightweight selector
-  // that only triggers when channel count, samples, steps, or mute/solo change
-  const channelFingerprint = useAppStore((s) =>
-    s.channels.map((ch) =>
-      `${ch.id}:${ch.sample?.id ?? ''}:${ch.muted}:${ch.solo}:${ch.volume}:${ch.steps.join('')}:${ch.tripletSteps.join('')}`
-    ).join('|')
+  // Subscribe to channel changes with a stable selector.
+  // Only track structural changes that affect audio playback,
+  // not step position changes.
+  const channelCount = useAppStore((s) => s.channels.length);
+  const channelMuteSoloKey = useAppStore((s) =>
+    s.channels.map((ch) => `${ch.id}:${ch.muted}:${ch.solo}`).join(',')
+  );
+  // Track step patterns by joining just the toggled indices (sparse, stable)
+  const channelStepKey = useAppStore((s) =>
+    s.channels.map((ch) => {
+      const on = ch.steps.reduce((acc, v, i) => v ? acc + i + ',' : acc, '');
+      const ton = ch.tripletSteps.reduce((acc, v, i) => v ? acc + i + ',' : acc, '');
+      return `${ch.id}:${on}|${ton}`;
+    }).join(';')
+  );
+  // Track sample assignments
+  const channelSampleKey = useAppStore((s) =>
+    s.channels.map((ch) => `${ch.id}:${ch.sample?.id ?? ''}:${ch.volume}`).join(',')
   );
 
   const start = useCallback(() => {
@@ -72,18 +81,21 @@ function useSequencerIOS() {
     if (!listenerRef.current) {
       listenerRef.current = addStepChangeListener(
         (event: { currentStep: number; currentTripletStep: number }) => {
-          // Use getState + setState directly to avoid triggering React re-renders
-          const store = useAppStore.getState();
-          if (store.sequencer.currentStep !== event.currentStep) {
-            useAppStore.setState((s) => ({
-              sequencer: { ...s.sequencer, currentStep: event.currentStep },
-            }));
-          }
-          if (store.sequencer.currentTripletStep !== event.currentTripletStep) {
-            useAppStore.setState((s) => ({
-              sequencer: { ...s.sequencer, currentTripletStep: event.currentTripletStep },
-            }));
-          }
+          // Batch both updates into a single setState
+          useAppStore.setState((s) => {
+            const seq = s.sequencer;
+            if (seq.currentStep === event.currentStep &&
+                seq.currentTripletStep === event.currentTripletStep) {
+              return s; // no change
+            }
+            return {
+              sequencer: {
+                ...seq,
+                currentStep: event.currentStep,
+                currentTripletStep: event.currentTripletStep,
+              },
+            };
+          });
         },
       );
     }
@@ -96,17 +108,20 @@ function useSequencerIOS() {
     isStartedRef.current = false;
     stopSequencer();
     setPlaying(false);
-    setCurrentStep(0);
-    setCurrentTripletStep(0);
-  }, [setPlaying, setCurrentStep, setCurrentTripletStep]);
+    useAppStore.setState((s) => ({
+      sequencer: { ...s.sequencer, currentStep: 0, currentTripletStep: 0 },
+    }));
+  }, [setPlaying]);
 
-  // Hot-update config when relevant state changes during playback
-  // Uses primitive selectors so it won't fire on currentStep changes
+  // Hot-update config when relevant state changes during playback.
+  // Uses stable string selectors — won't fire on currentStep changes.
   useEffect(() => {
     if (!isStartedRef.current) return;
     const config = buildConfig();
     updateSequencerConfig(config);
-  }, [bpm, swing, stepCount, punchIn, repeatBeatOrigin, channelFingerprint, buildConfig]);
+  }, [bpm, swing, stepCount, punchIn, repeatBeatOrigin,
+      channelCount, channelMuteSoloKey, channelStepKey, channelSampleKey,
+      buildConfig]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -129,7 +144,12 @@ function useSequencerIOS() {
 // Web/Android: existing JS setInterval implementation
 // ──────────────────────────────────────────────────
 function useSequencerJS(triggerCallbacks: Map<number, TriggerCallback>) {
-  const { sequencer, channels, advanceStep, setCurrentStep, setPlaying } = useAppStore();
+  const bpm = useAppStore((s) => s.sequencer.bpm);
+  const swing = useAppStore((s) => s.sequencer.swing);
+  const stepCount = useAppStore((s) => s.sequencer.stepCount);
+  const isPlaying = useAppStore((s) => s.sequencer.isPlaying);
+  const setCurrentStep = useAppStore((s) => s.setCurrentStep);
+  const setPlaying = useAppStore((s) => s.setPlaying);
   const setCurrentTripletStep = useAppStore((s) => s.setCurrentTripletStep);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const nextStepTimeRef = useRef<number>(0);
@@ -141,12 +161,12 @@ function useSequencerJS(triggerCallbacks: Map<number, TriggerCallback>) {
   const TICK_MS = 25;
 
   const getStepDurationMs = useCallback(() => {
-    return (60000 / sequencer.bpm) / 4;
-  }, [sequencer.bpm]);
+    return (60000 / bpm) / 4;
+  }, [bpm]);
 
   const getTripletStepDurationMs = useCallback(() => {
-    return ((60000 / sequencer.bpm) / 4) * (2 / 3);
-  }, [sequencer.bpm]);
+    return ((60000 / bpm) / 4) * (2 / 3);
+  }, [bpm]);
 
   const scheduleStep = useCallback(
     (stepIndex: number, delay: number) => {
@@ -327,15 +347,15 @@ function useSequencerJS(triggerCallbacks: Map<number, TriggerCallback>) {
   }, []);
 
   useEffect(() => {
-    if (sequencer.isPlaying && intervalRef.current) {
+    if (isPlaying && intervalRef.current) {
       clearInterval(intervalRef.current);
       nextStepTimeRef.current = Date.now();
       nextTripletTimeRef.current = Date.now();
       intervalRef.current = setInterval(schedulerTick, TICK_MS);
     }
-  }, [sequencer.bpm, schedulerTick, sequencer.isPlaying]);
+  }, [bpm, schedulerTick, isPlaying]);
 
-  return { start, stop, isPlaying: sequencer.isPlaying };
+  return { start, stop, isPlaying };
 }
 
 // ──────────────────────────────────────────────────

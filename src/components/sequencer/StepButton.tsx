@@ -9,7 +9,7 @@ interface StepButtonProps {
   onPress: () => void;
 }
 
-export function StepButton({
+export const StepButton = React.memo(function StepButton({
   active,
   isCurrentStep,
   isDownbeat,
@@ -33,7 +33,7 @@ export function StepButton({
       activeOpacity={0.6}
     />
   );
-}
+});
 
 const styles = StyleSheet.create({
   step: {

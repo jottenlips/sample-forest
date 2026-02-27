@@ -12,10 +12,15 @@ interface TransportBarProps {
 }
 
 export function TransportBar({ onPlay, onStop, isPlaying }: TransportBarProps) {
-  const { sequencer, setBpm, setSwing, setStepCount } = useAppStore();
+  const bpm = useAppStore((s) => s.sequencer.bpm);
+  const swing = useAppStore((s) => s.sequencer.swing);
+  const stepCount = useAppStore((s) => s.sequencer.stepCount);
+  const setBpm = useAppStore((s) => s.setBpm);
+  const setSwing = useAppStore((s) => s.setSwing);
+  const setStepCount = useAppStore((s) => s.setStepCount);
   const stepOptions = [8, 16, 24, 32];
-  const [localBpm, setLocalBpm] = useState(sequencer.bpm);
-  const [localSwing, setLocalSwing] = useState(sequencer.swing);
+  const [localBpm, setLocalBpm] = useState(bpm);
+  const [localSwing, setLocalSwing] = useState(swing);
   const [draggingBpm, setDraggingBpm] = useState(false);
   const [draggingSwing, setDraggingSwing] = useState(false);
 
@@ -40,14 +45,14 @@ export function TransportBar({ onPlay, onStop, isPlaying }: TransportBarProps) {
                 key={count}
                 style={[
                   styles.stepOption,
-                  sequencer.stepCount === count && styles.stepOptionActive,
+                  stepCount === count && styles.stepOptionActive,
                 ]}
                 onPress={() => setStepCount(count)}
               >
                 <Text
                   style={[
                     styles.stepOptionText,
-                    sequencer.stepCount === count && styles.stepOptionTextActive,
+                    stepCount === count && styles.stepOptionTextActive,
                   ]}
                 >
                   {count}
@@ -67,7 +72,7 @@ export function TransportBar({ onPlay, onStop, isPlaying }: TransportBarProps) {
           minimumValue={40}
           maximumValue={240}
           step={1}
-          value={draggingBpm ? localBpm : sequencer.bpm}
+          value={draggingBpm ? localBpm : bpm}
           onValueChange={(val) => {
             setLocalBpm(val);
             setDraggingBpm(true);
@@ -81,7 +86,7 @@ export function TransportBar({ onPlay, onStop, isPlaying }: TransportBarProps) {
           maximumTrackTintColor={colors.pine}
           thumbTintColor={colors.mint}
         />
-        <Text style={styles.sliderValue}>{draggingBpm ? localBpm : sequencer.bpm}</Text>
+        <Text style={styles.sliderValue}>{draggingBpm ? localBpm : bpm}</Text>
       </View>
 
       <View style={styles.sliderRow}>
@@ -91,7 +96,7 @@ export function TransportBar({ onPlay, onStop, isPlaying }: TransportBarProps) {
           minimumValue={0}
           maximumValue={100}
           step={1}
-          value={draggingSwing ? localSwing : sequencer.swing}
+          value={draggingSwing ? localSwing : swing}
           onValueChange={(val) => {
             setLocalSwing(val);
             setDraggingSwing(true);
@@ -105,7 +110,7 @@ export function TransportBar({ onPlay, onStop, isPlaying }: TransportBarProps) {
           maximumTrackTintColor={colors.pine}
           thumbTintColor={colors.mint}
         />
-        <Text style={styles.sliderValue}>{draggingSwing ? localSwing : sequencer.swing}%</Text>
+        <Text style={styles.sliderValue}>{draggingSwing ? localSwing : swing}%</Text>
       </View>
     </View>
   );

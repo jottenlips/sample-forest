@@ -82,6 +82,8 @@ class SequencerEngine {
 
   private let lookaheadSec: Double = 0.1 // 100ms
   private let timerIntervalSec: Double = 0.02 // 20ms
+  private var lastUIUpdateTime: Double = 0
+  private let uiUpdateIntervalSec: Double = 0.05 // 50ms = 20fps for UI
 
   init(bufferPool: AudioBufferPool, onStepChange: @escaping (Int, Int) -> Void) {
     self.bufferPool = bufferPool
@@ -258,8 +260,9 @@ class SequencerEngine {
       currentTripletStep = (currentTripletStep + 1) % max(1, tripletCount)
     }
 
-    // Emit a single UI update per tick, only if something changed
-    if currentStep != prevStep || currentTripletStep != prevTripletStep {
+    // Throttle UI updates to ~20fps to avoid flooding the JS bridge
+    if (currentStep != prevStep || currentTripletStep != prevTripletStep) && (now - lastUIUpdateTime >= uiUpdateIntervalSec) {
+      lastUIUpdateTime = now
       let uiStep = currentStep
       let uiTripletStep = currentTripletStep
       DispatchQueue.main.async { [weak self] in

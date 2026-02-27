@@ -3,6 +3,7 @@ import { View, ScrollView, TouchableOpacity, Text, StyleSheet, StatusBar } from 
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { useAppStore } from '../state/useAppStore';
+import { useShallow } from 'zustand/shallow';
 import { TransportBar } from '../components/transport/TransportBar';
 import { PunchInBar } from '../components/transport/PunchInBar';
 import { ChannelRow } from '../components/channels/ChannelRow';
@@ -42,7 +43,9 @@ function ChannelPlayerBridge({
 }
 
 export function MainScreen({ onEditSample, onOpenSynth, onChopSong, onExport }: MainScreenProps) {
-  const channels = useAppStore((s) => s.channels);
+  // Only subscribe to channel IDs — avoid re-rendering when steps/samples change
+  const channelIds = useAppStore(useShallow((s) => s.channels.map((c) => c.id)));
+  const channelCount = useAppStore((s) => s.channels.length);
   const addChannel = useAppStore((s) => s.addChannel);
   const triggerRef = useRef<Map<number, () => void>>(new Map());
 
@@ -55,21 +58,21 @@ export function MainScreen({ onEditSample, onOpenSynth, onChopSong, onExport }: 
   useEffect(() => {
     if (isNativeAvailable) return; // Not needed when native engine is available
     const map = triggerCallbacks.current;
-    for (const ch of channels) {
-      if (!map.has(ch.id)) {
-        map.set(ch.id, (channelId: number) => {
+    const idSet = new Set(channelIds);
+    for (const id of channelIds) {
+      if (!map.has(id)) {
+        map.set(id, (channelId: number) => {
           const trigger = triggerRef.current.get(channelId);
           if (trigger) trigger();
         });
       }
     }
-    const channelIds = new Set(channels.map((c) => c.id));
     for (const id of map.keys()) {
-      if (!channelIds.has(id)) {
+      if (!idSet.has(id)) {
         map.delete(id);
       }
     }
-  }, [channels]);
+  }, [channelIds]);
 
   // On iOS: no triggerCallbacks needed. On web: pass the callback map.
   const { start, stop, isPlaying } = useSequencer(
@@ -85,10 +88,10 @@ export function MainScreen({ onEditSample, onOpenSynth, onChopSong, onExport }: 
       <StatusBar barStyle="light-content" backgroundColor={colors.forest} />
 
       {/* Hidden player bridges - manages audio players for each channel */}
-      {channels.map((ch) => (
+      {channelIds.map((id) => (
         <ChannelPlayerBridge
-          key={ch.id}
-          channelId={ch.id}
+          key={id}
+          channelId={id}
           triggerRef={triggerRef}
         />
       ))}
@@ -110,14 +113,14 @@ export function MainScreen({ onEditSample, onOpenSynth, onChopSong, onExport }: 
       <ScrollView style={styles.channelList} contentContainerStyle={styles.channelListContent}>
         <BeatPresetBar />
 
-        {channels.map((ch) => (
+        {channelIds.map((id) => (
           <ChannelRow
-            key={ch.id}
-            channelId={ch.id}
+            key={id}
+            channelId={id}
             onEditSample={onEditSample}
             onOpenSynth={onOpenSynth}
             triggerRef={triggerRef}
-            canRemove={channels.length > 1}
+            canRemove={channelCount > 1}
           />
         ))}
 
