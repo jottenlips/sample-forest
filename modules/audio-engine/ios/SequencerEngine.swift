@@ -219,6 +219,9 @@ class SequencerEngine {
       swapMap = map
     }
 
+    let prevStep = currentStep
+    let prevTripletStep = currentTripletStep
+
     // Schedule normal steps
     while nextStepTime < now + lookaheadSec {
       var step = currentStep
@@ -233,13 +236,6 @@ class SequencerEngine {
       let scheduleTime = nextStepTime + swingDelay
 
       scheduleNormalStep(step: step, at: scheduleTime, config: config, hasSolo: hasSolo, swapMap: swapMap)
-
-      // Notify UI
-      let uiStep = step
-      DispatchQueue.main.async { [weak self] in
-        guard let self = self, self.isPlaying else { return }
-        self.onStepChange(uiStep, self.currentTripletStep)
-      }
 
       nextStepTime += stepDuration
       currentStep = (currentStep + 1) % config.stepCount
@@ -258,14 +254,18 @@ class SequencerEngine {
 
       scheduleTripletStep(step: tripletStep, at: nextTripletTime, config: config, hasSolo: hasSolo, swapMap: swapMap)
 
-      let uiTripletStep = tripletStep
-      DispatchQueue.main.async { [weak self] in
-        guard let self = self, self.isPlaying else { return }
-        self.onStepChange(self.currentStep, uiTripletStep)
-      }
-
       nextTripletTime += tripletDuration
       currentTripletStep = (currentTripletStep + 1) % max(1, tripletCount)
+    }
+
+    // Emit a single UI update per tick, only if something changed
+    if currentStep != prevStep || currentTripletStep != prevTripletStep {
+      let uiStep = currentStep
+      let uiTripletStep = currentTripletStep
+      DispatchQueue.main.async { [weak self] in
+        guard let self = self, self.isPlaying else { return }
+        self.onStepChange(uiStep, uiTripletStep)
+      }
     }
   }
 

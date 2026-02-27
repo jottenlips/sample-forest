@@ -1,4 +1,4 @@
-import { Platform, NativeEventEmitter, NativeModules } from 'react-native';
+import { Platform } from 'react-native';
 import type {
   SequencerConfig,
   SynthParams,
@@ -22,9 +22,12 @@ const isIOS = Platform.OS === 'ios';
 
 // Safely require native module — returns null if not compiled in yet
 let NativeAudioEngine: any = null;
+let ExpoEventEmitter: any = null;
 if (isIOS) {
   try {
-    NativeAudioEngine = require('expo-modules-core').requireNativeModule('AudioEngine');
+    const core = require('expo-modules-core');
+    NativeAudioEngine = core.requireNativeModule('AudioEngine');
+    ExpoEventEmitter = core.EventEmitter;
   } catch (e) {
     console.warn('AudioEngine native module not available — using JS fallback');
   }
@@ -32,12 +35,12 @@ if (isIOS) {
 
 export const isNativeAvailable = NativeAudioEngine !== null;
 
-// Event emitter for onStepChange
-let emitter: NativeEventEmitter | null = null;
-function getEmitter(): NativeEventEmitter | null {
-  if (!isNativeAvailable) return null;
+// Event emitter using expo-modules-core EventEmitter
+let emitter: any = null;
+function getEmitter(): any {
+  if (!isNativeAvailable || !ExpoEventEmitter) return null;
   if (!emitter) {
-    emitter = new NativeEventEmitter(NativeAudioEngine);
+    emitter = new ExpoEventEmitter(NativeAudioEngine);
   }
   return emitter;
 }

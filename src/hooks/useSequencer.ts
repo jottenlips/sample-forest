@@ -1,8 +1,13 @@
 import { useRef, useCallback, useEffect } from 'react';
-import { Platform } from 'react-native';
 import { useAppStore } from '../state/useAppStore';
 import { getTripletStepCount } from '../types';
-import { isNativeAvailable } from '../../modules/audio-engine';
+import {
+  isNativeAvailable,
+  startSequencer,
+  stopSequencer,
+  updateSequencerConfig,
+  addStepChangeListener,
+} from '../../modules/audio-engine';
 
 type TriggerCallback = (channelId: number) => void;
 
@@ -10,16 +15,24 @@ type TriggerCallback = (channelId: number) => void;
 // iOS: Native AVAudioEngine sequencer via Expo Module
 // ──────────────────────────────────────────────────
 function useSequencerIOS() {
-  const { sequencer, channels, setCurrentStep, setPlaying } = useAppStore();
-  const setCurrentTripletStep = useAppStore((s) => s.setCurrentTripletStep);
+  // Use selectors to avoid subscribing to the entire store
+  const bpm = useAppStore((s) => s.sequencer.bpm);
+  const swing = useAppStore((s) => s.sequencer.swing);
+  const stepCount = useAppStore((s) => s.sequencer.stepCount);
+  const isPlaying = useAppStore((s) => s.sequencer.isPlaying);
   const punchIn = useAppStore((s) => s.punchIn);
   const repeatBeatOrigin = useAppStore((s) => s.repeatBeatOrigin);
+  const setCurrentStep = useAppStore((s) => s.setCurrentStep);
+  const setCurrentTripletStep = useAppStore((s) => s.setCurrentTripletStep);
+  const setPlaying = useAppStore((s) => s.setPlaying);
+
   const listenerRef = useRef<{ remove: () => void } | null>(null);
   const isStartedRef = useRef(false);
+  // Track a version counter so the effect knows when channels changed
+  const channelVersionRef = useRef(0);
 
-  // Build native config from current state
+  // Build native config from current state snapshot (no subscriptions)
   const buildConfig = useCallback(() => {
-    const AudioEngine = require('../../modules/audio-engine');
     const state = useAppStore.getState();
     return {
       bpm: state.sequencer.bpm,
@@ -42,50 +55,58 @@ function useSequencerIOS() {
     };
   }, []);
 
+  // Subscribe to channel changes separately with a lightweight selector
+  // that only triggers when channel count, samples, steps, or mute/solo change
+  const channelFingerprint = useAppStore((s) =>
+    s.channels.map((ch) =>
+      `${ch.id}:${ch.sample?.id ?? ''}:${ch.muted}:${ch.solo}:${ch.volume}:${ch.steps.join('')}:${ch.tripletSteps.join('')}`
+    ).join('|')
+  );
+
   const start = useCallback(() => {
-    const AudioEngine = require('../../modules/audio-engine');
     if (isStartedRef.current) return;
     isStartedRef.current = true;
     setPlaying(true);
 
     // Listen for step changes from native
     if (!listenerRef.current) {
-      listenerRef.current = AudioEngine.addStepChangeListener(
+      listenerRef.current = addStepChangeListener(
         (event: { currentStep: number; currentTripletStep: number }) => {
-          setCurrentStep(event.currentStep);
-          setCurrentTripletStep(event.currentTripletStep);
+          // Use getState + setState directly to avoid triggering React re-renders
+          const store = useAppStore.getState();
+          if (store.sequencer.currentStep !== event.currentStep) {
+            useAppStore.setState((s) => ({
+              sequencer: { ...s.sequencer, currentStep: event.currentStep },
+            }));
+          }
+          if (store.sequencer.currentTripletStep !== event.currentTripletStep) {
+            useAppStore.setState((s) => ({
+              sequencer: { ...s.sequencer, currentTripletStep: event.currentTripletStep },
+            }));
+          }
         },
       );
     }
 
     const config = buildConfig();
-    AudioEngine.startSequencer(config);
-  }, [buildConfig, setPlaying, setCurrentStep, setCurrentTripletStep]);
+    startSequencer(config);
+  }, [buildConfig, setPlaying]);
 
   const stop = useCallback(() => {
-    const AudioEngine = require('../../modules/audio-engine');
     isStartedRef.current = false;
-    AudioEngine.stopSequencer();
+    stopSequencer();
     setPlaying(false);
     setCurrentStep(0);
     setCurrentTripletStep(0);
   }, [setPlaying, setCurrentStep, setCurrentTripletStep]);
 
   // Hot-update config when relevant state changes during playback
+  // Uses primitive selectors so it won't fire on currentStep changes
   useEffect(() => {
     if (!isStartedRef.current) return;
-    const AudioEngine = require('../../modules/audio-engine');
     const config = buildConfig();
-    AudioEngine.updateSequencerConfig(config);
-  }, [
-    sequencer.bpm,
-    sequencer.swing,
-    sequencer.stepCount,
-    channels,
-    punchIn,
-    repeatBeatOrigin,
-    buildConfig,
-  ]);
+    updateSequencerConfig(config);
+  }, [bpm, swing, stepCount, punchIn, repeatBeatOrigin, channelFingerprint, buildConfig]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -95,14 +116,13 @@ function useSequencerIOS() {
         listenerRef.current = null;
       }
       if (isStartedRef.current) {
-        const AudioEngine = require('../../modules/audio-engine');
-        AudioEngine.stopSequencer();
+        stopSequencer();
         isStartedRef.current = false;
       }
     };
   }, []);
 
-  return { start, stop, isPlaying: sequencer.isPlaying };
+  return { start, stop, isPlaying };
 }
 
 // ──────────────────────────────────────────────────
