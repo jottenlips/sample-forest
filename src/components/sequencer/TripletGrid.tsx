@@ -11,16 +11,22 @@ interface TripletGridProps {
 }
 
 const TripletButton = React.memo(function TripletButton({
-  active,
-  isCurrent,
-  isGroupStart,
-  onPress,
+  channelId,
+  stepIndex,
 }: {
-  active: boolean;
-  isCurrent: boolean;
-  isGroupStart: boolean;
-  onPress: () => void;
+  channelId: number;
+  stepIndex: number;
 }) {
+  const active = useAppStore(
+    (s) => s.channels.find((c) => c.id === channelId)?.tripletSteps[stepIndex] ?? false
+  );
+  const isCurrent = useAppStore(
+    (s) => s.sequencer.isPlaying && s.sequencer.currentTripletStep === stepIndex
+  );
+  const toggleTripletStep = useAppStore((s) => s.toggleTripletStep);
+
+  const isGroupStart = stepIndex % 3 === 0;
+
   const bgColor =
     isCurrent && active
       ? colors.seafoam
@@ -35,23 +41,15 @@ const TripletButton = React.memo(function TripletButton({
   return (
     <TouchableOpacity
       style={[styles.step, { backgroundColor: bgColor }]}
-      onPress={onPress}
+      onPress={() => toggleTripletStep(channelId, stepIndex)}
       activeOpacity={0.6}
     />
   );
 });
 
 export const TripletGrid = React.memo(function TripletGrid({ channelId }: TripletGridProps) {
-  const tripletSteps = useAppStore((s) => s.channels.find((c) => c.id === channelId)?.tripletSteps);
-  const currentTripletStep = useAppStore((s) => s.sequencer.currentTripletStep);
-  const isPlaying = useAppStore((s) => s.sequencer.isPlaying);
   const stepCount = useAppStore((s) => s.sequencer.stepCount);
-  const toggleTripletStep = useAppStore((s) => s.toggleTripletStep);
-
-  if (!tripletSteps) return null;
-
   const tripletCount = getTripletStepCount(stepCount);
-  const visibleSteps = tripletSteps.slice(0, tripletCount);
 
   const rows: number[][] = [];
   for (let i = 0; i < tripletCount; i += TRIPLETS_PER_ROW) {
@@ -69,10 +67,8 @@ export const TripletGrid = React.memo(function TripletGrid({ channelId }: Triple
             {row.map((i) => (
               <TripletButton
                 key={i}
-                active={visibleSteps[i]}
-                isCurrent={isPlaying && currentTripletStep === i}
-                isGroupStart={i % 3 === 0}
-                onPress={() => toggleTripletStep(channelId, i)}
+                channelId={channelId}
+                stepIndex={i}
               />
             ))}
             {row.length < TRIPLETS_PER_ROW &&

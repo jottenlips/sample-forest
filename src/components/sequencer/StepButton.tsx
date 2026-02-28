@@ -1,20 +1,27 @@
 import React from "react";
 import { TouchableOpacity, StyleSheet } from "react-native";
 import { colors } from "../../theme/colors";
+import { useAppStore } from "../../state/useAppStore";
 
 interface StepButtonProps {
-  active: boolean;
-  isCurrentStep: boolean;
-  isDownbeat: boolean;
-  onPress: () => void;
+  channelId: number;
+  stepIndex: number;
 }
 
 export const StepButton = React.memo(function StepButton({
-  active,
-  isCurrentStep,
-  isDownbeat,
-  onPress,
+  channelId,
+  stepIndex,
 }: StepButtonProps) {
+  const active = useAppStore(
+    (s) => s.channels.find((c) => c.id === channelId)?.steps[stepIndex] ?? false
+  );
+  const isCurrentStep = useAppStore(
+    (s) => s.sequencer.isPlaying && s.sequencer.currentStep === stepIndex
+  );
+  const toggleStep = useAppStore((s) => s.toggleStep);
+
+  const isDownbeat = stepIndex % 4 === 0;
+
   const bgColor =
     isCurrentStep && active
       ? colors.seafoam
@@ -29,7 +36,7 @@ export const StepButton = React.memo(function StepButton({
   return (
     <TouchableOpacity
       style={[styles.step, { backgroundColor: bgColor }]}
-      onPress={onPress}
+      onPress={() => toggleStep(channelId, stepIndex)}
       activeOpacity={0.6}
     />
   );

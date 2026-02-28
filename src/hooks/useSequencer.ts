@@ -25,8 +25,7 @@ function useSequencerIOS() {
 
   const listenerRef = useRef<{ remove: () => void } | null>(null);
   const isStartedRef = useRef(false);
-  // Track config version to debounce updates
-  const configVersionRef = useRef(0);
+  const configUpdateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Build native config from current state snapshot
   const buildConfig = useCallback(() => {
@@ -114,11 +113,15 @@ function useSequencerIOS() {
   }, [setPlaying]);
 
   // Hot-update config when relevant state changes during playback.
-  // Uses stable string selectors — won't fire on currentStep changes.
+  // Debounced to batch rapid changes and reduce bridge traffic.
   useEffect(() => {
     if (!isStartedRef.current) return;
-    const config = buildConfig();
-    updateSequencerConfig(config);
+    if (configUpdateTimer.current) clearTimeout(configUpdateTimer.current);
+    configUpdateTimer.current = setTimeout(() => {
+      if (!isStartedRef.current) return;
+      const config = buildConfig();
+      updateSequencerConfig(config);
+    }, 50);
   }, [bpm, swing, stepCount, punchIn, repeatBeatOrigin,
       channelCount, channelMuteSoloKey, channelStepKey, channelSampleKey,
       buildConfig]);
@@ -126,6 +129,10 @@ function useSequencerIOS() {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      if (configUpdateTimer.current) {
+        clearTimeout(configUpdateTimer.current);
+        configUpdateTimer.current = null;
+      }
       if (listenerRef.current) {
         listenerRef.current.remove();
         listenerRef.current = null;

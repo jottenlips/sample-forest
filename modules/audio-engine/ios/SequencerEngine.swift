@@ -71,6 +71,9 @@ class SequencerEngine {
 
   private var config: SequencerConfig?
   private var isPlaying = false
+  // Cached derived values (recomputed on config change)
+  private var cachedHasSolo: Bool = false
+  private var cachedSwapMap: [Int: Int]? = nil
 
   private var timer: DispatchSourceTimer?
   private let schedulerQueue = DispatchQueue(label: "com.sampleforest.sequencer", qos: .userInteractive)
@@ -81,9 +84,9 @@ class SequencerEngine {
   private var nextTripletTime: Double = 0
 
   private let lookaheadSec: Double = 0.1 // 100ms
-  private let timerIntervalSec: Double = 0.02 // 20ms
+  private let timerIntervalSec: Double = 0.05 // 50ms — 20Hz is plenty for 100ms lookahead
   private var lastUIUpdateTime: Double = 0
-  private let uiUpdateIntervalSec: Double = 0.05 // 50ms = 20fps for UI
+  private let uiUpdateIntervalSec: Double = 0.15 // 150ms ≈ 7fps for UI step highlight
 
   init(bufferPool: AudioBufferPool, onStepChange: @escaping (Int, Int) -> Void) {
     self.bufferPool = bufferPool
@@ -133,6 +136,9 @@ class SequencerEngine {
       try? engine.start()
     }
 
+    // Pre-compute derived state and create player nodes
+    recomputeDerivedState(config)
+
     // Set next step time to now
     let now = currentHostTimeInSeconds()
     nextStepTime = now
@@ -157,7 +163,27 @@ class SequencerEngine {
 
   func updateConfig(_ newConfig: SequencerConfig) {
     schedulerQueue.async { [weak self] in
-      self?.config = newConfig
+      guard let self = self else { return }
+      self.config = newConfig
+      self.recomputeDerivedState(newConfig)
+    }
+  }
+
+  private func recomputeDerivedState(_ config: SequencerConfig) {
+    cachedHasSolo = config.channels.contains { $0.solo }
+    if config.punchIn == "swap" && config.channels.count > 1 {
+      var map = [Int: Int]()
+      let ids = config.channels.map { $0.channelId }
+      for i in 0..<ids.count {
+        map[ids[i]] = ids[(i + 1) % ids.count]
+      }
+      cachedSwapMap = map
+    } else {
+      cachedSwapMap = nil
+    }
+    // Pre-create nodes for any new samples
+    for channel in config.channels where !channel.sampleId.isEmpty {
+      _ = getOrCreatePlayerNode(for: channel.sampleId)
     }
   }
 
@@ -208,18 +234,8 @@ class SequencerEngine {
     }
 
     let swingAmount = (config.swing / 100.0) * 0.75
-    let hasSolo = config.channels.contains { $0.solo }
-
-    // Build swap map if needed
-    var swapMap: [Int: Int]? = nil
-    if config.punchIn == "swap" && config.channels.count > 1 {
-      var map = [Int: Int]()
-      let ids = config.channels.map { $0.channelId }
-      for i in 0..<ids.count {
-        map[ids[i]] = ids[(i + 1) % ids.count]
-      }
-      swapMap = map
-    }
+    let hasSolo = cachedHasSolo
+    let swapMap = cachedSwapMap
 
     let prevStep = currentStep
     let prevTripletStep = currentTripletStep
@@ -351,18 +367,20 @@ class SequencerEngine {
 
   // MARK: - Time Utilities
 
+  private static let timebaseInfo: mach_timebase_info_data_t = {
+    var info = mach_timebase_info_data_t()
+    mach_timebase_info(&info)
+    return info
+  }()
+
   private func currentHostTimeInSeconds() -> Double {
-    var timebaseInfo = mach_timebase_info_data_t()
-    mach_timebase_info(&timebaseInfo)
     let hostTime = mach_absolute_time()
-    let nanos = Double(hostTime) * Double(timebaseInfo.numer) / Double(timebaseInfo.denom)
+    let nanos = Double(hostTime) * Double(Self.timebaseInfo.numer) / Double(Self.timebaseInfo.denom)
     return nanos / 1_000_000_000.0
   }
 
   private func secondsToHostTime(_ seconds: Double) -> UInt64 {
-    var timebaseInfo = mach_timebase_info_data_t()
-    mach_timebase_info(&timebaseInfo)
     let nanos = seconds * 1_000_000_000.0
-    return UInt64(nanos * Double(timebaseInfo.denom) / Double(timebaseInfo.numer))
+    return UInt64(nanos * Double(Self.timebaseInfo.denom) / Double(Self.timebaseInfo.numer))
   }
 }

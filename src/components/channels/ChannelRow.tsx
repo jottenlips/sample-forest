@@ -48,16 +48,18 @@ interface ChannelRowProps {
   canRemove: boolean;
 }
 
-export function ChannelRow({
+export const ChannelRow = React.memo(function ChannelRow({
   channelId,
   onEditSample,
   onOpenSynth,
   triggerRef,
   canRemove,
 }: ChannelRowProps) {
-  const channel = useAppStore((s) =>
-    s.channels.find((c) => c.id === channelId),
-  );
+  const label = useAppStore((s) => s.channels.find((c) => c.id === channelId)?.label ?? '');
+  const muted = useAppStore((s) => s.channels.find((c) => c.id === channelId)?.muted ?? false);
+  const solo = useAppStore((s) => s.channels.find((c) => c.id === channelId)?.solo ?? false);
+  const sampleName = useAppStore((s) => s.channels.find((c) => c.id === channelId)?.sample?.name ?? null);
+  const hasSample = useAppStore((s) => !!s.channels.find((c) => c.id === channelId)?.sample);
   const loadSample = useAppStore((s) => s.loadSample);
   const removeSample = useAppStore((s) => s.removeSample);
   const removeChannel = useAppStore((s) => s.removeChannel);
@@ -65,7 +67,6 @@ export function ChannelRow({
   const toggleMute = useAppStore((s) => s.toggleMute);
   const toggleSolo = useAppStore((s) => s.toggleSolo);
 
-  if (!channel) return null;
   const { isRecording, startRecording, stopRecording } = useRecorder();
 
   const handleRecord = async () => {
@@ -99,22 +100,22 @@ export function ChannelRow({
   };
 
   const handleTapSample = () => {
-    if (channel.sample) {
+    if (hasSample) {
       const trigger = triggerRef.current.get(channelId);
       if (trigger) trigger();
     }
   };
 
   const handleLongPress = () => {
-    if (channel.sample) {
+    if (hasSample && sampleName) {
       if (Platform.OS === "web") {
         const action = window.prompt(
-          `Sample: ${channel.sample.name}\nType "edit" to edit or "remove" to remove:`,
+          `Sample: ${sampleName}\nType "edit" to edit or "remove" to remove:`,
         );
         if (action === "edit") onEditSample(channelId);
         else if (action === "remove") removeSample(channelId);
       } else {
-        Alert.alert("Sample Options", channel.sample.name, [
+        Alert.alert("Sample Options", sampleName, [
           { text: "Edit", onPress: () => onEditSample(channelId) },
           {
             text: "Remove",
@@ -128,22 +129,22 @@ export function ChannelRow({
   };
 
   return (
-    <View style={[styles.container, channel.muted && styles.muted]}>
+    <View style={[styles.container, muted && styles.muted]}>
       <View style={styles.header}>
         <View style={styles.labelRow}>
-          <Text style={styles.label}>{channel.label}</Text>
+          <Text style={styles.label}>{label}</Text>
           <View style={styles.controls}>
             <TouchableOpacity
               style={[
                 styles.controlBtn,
-                channel.muted && styles.controlBtnActive,
+                muted && styles.controlBtnActive,
               ]}
               onPress={() => toggleMute(channelId)}
             >
               <Text style={styles.controlText}>M</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.controlBtn, channel.solo && styles.soloBtnActive]}
+              style={[styles.controlBtn, solo && styles.soloBtnActive]}
               onPress={() => toggleSolo(channelId)}
             >
               <Text style={styles.controlText}>S</Text>
@@ -169,14 +170,14 @@ export function ChannelRow({
       <SequencerGrid channelId={channelId} />
       <TripletGrid channelId={channelId} />
       <View style={styles.sampleRow}>
-        {channel.sample ? (
+        {hasSample ? (
           <View style={styles.sampleSlotRow}>
             <TouchableOpacity
               style={styles.sampleSlot}
               onPress={handleTapSample}
             >
               <Text style={styles.sampleName} numberOfLines={1}>
-                {channel.sample.name}
+                {sampleName}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -213,7 +214,7 @@ export function ChannelRow({
       </View>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {

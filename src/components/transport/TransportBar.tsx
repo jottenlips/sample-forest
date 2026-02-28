@@ -76,7 +76,6 @@ export function TransportBar({ onPlay, onStop, isPlaying }: TransportBarProps) {
           onValueChange={(val) => {
             setLocalBpm(val);
             setDraggingBpm(true);
-            setBpm(val);
           }}
           onSlidingComplete={(val) => {
             setBpm(val);
@@ -100,7 +99,6 @@ export function TransportBar({ onPlay, onStop, isPlaying }: TransportBarProps) {
           onValueChange={(val) => {
             setLocalSwing(val);
             setDraggingSwing(true);
-            setSwing(val);
           }}
           onSlidingComplete={(val) => {
             setSwing(val);
