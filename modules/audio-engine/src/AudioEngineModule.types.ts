@@ -5,7 +5,9 @@ export interface ChannelConfig {
   muted: boolean;
   solo: boolean;
   steps: boolean[];
+  stepPitches: number[];
   tripletSteps: boolean[];
+  tripletStepPitches: number[];
   trimStartMs: number;
   trimEndMs: number;
   playbackRate: number;
@@ -65,7 +67,9 @@ export interface ExportSceneConfig {
   stepCount: number;
   swing: number;
   channelSteps: Record<number, boolean[]>;
+  channelStepPitches: Record<number, number[]>;
   channelTripletSteps: Record<number, boolean[]>;
+  channelTripletStepPitches: Record<number, number[]>;
 }
 
 export interface ExportParams {
@@ -77,7 +81,9 @@ export interface ExportParams {
     muted: boolean;
     solo: boolean;
     steps: boolean[];
+    stepPitches: number[];
     tripletSteps: boolean[];
+    tripletStepPitches: number[];
     trimStartMs: number;
     trimEndMs: number;
     playbackRate: number;

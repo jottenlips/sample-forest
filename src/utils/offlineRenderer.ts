@@ -124,20 +124,30 @@ export function renderScene(
 
     // Normal steps
     const steps = scene.channelSteps[ch.id] ?? ch.steps;
+    const stepPitches = scene.channelStepPitches?.[ch.id] ?? ch.stepPitches;
     for (let i = 0; i < scene.stepCount; i++) {
       if (!steps[i]) continue;
       const isOffbeat = i % 2 === 1;
       const swingDelay = isOffbeat ? swingAmount * stepDuration : 0;
       const time = offset + i * stepDuration + swingDelay;
-      events.push({ channelId: ch.id, startTime: time, buffer: trimmed, volume, rate });
+      const pitchSemitones = stepPitches?.[i] ?? 0;
+      const effectiveRate = pitchSemitones !== 0
+        ? rate * Math.pow(2, pitchSemitones / 12)
+        : rate;
+      events.push({ channelId: ch.id, startTime: time, buffer: trimmed, volume, rate: effectiveRate });
     }
 
     // Triplet steps
     const triplets = scene.channelTripletSteps[ch.id] ?? ch.tripletSteps;
+    const tripletPitches = scene.channelTripletStepPitches?.[ch.id] ?? ch.tripletStepPitches;
     for (let i = 0; i < tripletStepCount; i++) {
       if (!triplets[i]) continue;
       const time = offset + i * tripletDuration;
-      events.push({ channelId: ch.id, startTime: time, buffer: trimmed, volume, rate });
+      const pitchSemitones = tripletPitches?.[i] ?? 0;
+      const effectiveRate = pitchSemitones !== 0
+        ? rate * Math.pow(2, pitchSemitones / 12)
+        : rate;
+      events.push({ channelId: ch.id, startTime: time, buffer: trimmed, volume, rate: effectiveRate });
     }
   }
 

@@ -41,7 +41,9 @@ function useSequencerIOS() {
         muted: ch.muted,
         solo: ch.solo,
         steps: ch.steps,
+        stepPitches: ch.stepPitches,
         tripletSteps: ch.tripletSteps,
+        tripletStepPitches: ch.tripletStepPitches,
         trimStartMs: ch.sample?.trimStartMs ?? 0,
         trimEndMs: ch.sample?.trimEndMs ?? 0,
         playbackRate: ch.sample?.playbackRate ?? 1.0,
@@ -251,11 +253,15 @@ function useSequencerWeb() {
           }
 
           const sample = target.sample!;
+          const pitchSemitones = ch.stepPitches[step] ?? 0;
+          const effectiveRate = pitchSemitones !== 0
+            ? sample.playbackRate * Math.pow(2, pitchSemitones / 12)
+            : sample.playbackRate;
           webAudioEngine.scheduleSample(
             sample.id,
             scheduleTime,
             sample.volume * target.volume,
-            sample.playbackRate,
+            effectiveRate,
             sample.trimStartMs ?? 0,
             sample.trimEndMs ?? 0,
             sample.durationMs,
@@ -300,11 +306,15 @@ function useSequencerWeb() {
           }
 
           const sample = target.sample!;
+          const pitchSemitones = ch.tripletStepPitches[tripletStep] ?? 0;
+          const effectiveRate = pitchSemitones !== 0
+            ? sample.playbackRate * Math.pow(2, pitchSemitones / 12)
+            : sample.playbackRate;
           webAudioEngine.scheduleSample(
             sample.id,
             scheduleTime,
             sample.volume * target.volume,
-            sample.playbackRate,
+            effectiveRate,
             sample.trimStartMs ?? 0,
             sample.trimEndMs ?? 0,
             sample.durationMs,

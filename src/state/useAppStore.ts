@@ -6,12 +6,15 @@ const DEFAULT_STEP_COUNT = 16;
 let nextChannelId = 3;
 
 function createDefaultChannels(stepCount: number): Channel[] {
+  const tripletCount = getTripletStepCount(stepCount);
   return Array.from({ length: 3 }, (_, i) => ({
     id: i,
     label: DEFAULT_LABELS[i],
     sample: null,
     steps: new Array(stepCount).fill(false),
-    tripletSteps: new Array(getTripletStepCount(stepCount)).fill(false),
+    stepPitches: new Array(stepCount).fill(0),
+    tripletSteps: new Array(tripletCount).fill(false),
+    tripletStepPitches: new Array(tripletCount).fill(0),
     muted: false,
     solo: false,
     volume: 0.8,
@@ -19,12 +22,15 @@ function createDefaultChannels(stepCount: number): Channel[] {
 }
 
 function createChannel(id: number, stepCount: number, label?: string): Channel {
+  const tripletCount = getTripletStepCount(stepCount);
   return {
     id,
     label: label || `Ch ${id + 1}`,
     sample: null,
     steps: new Array(stepCount).fill(false),
-    tripletSteps: new Array(getTripletStepCount(stepCount)).fill(false),
+    stepPitches: new Array(stepCount).fill(0),
+    tripletSteps: new Array(tripletCount).fill(false),
+    tripletStepPitches: new Array(tripletCount).fill(0),
     muted: false,
     solo: false,
     volume: 0.8,
@@ -39,6 +45,13 @@ interface AppStore {
   activeSceneId: number | null;
   punchIn: PunchInEffect;
   repeatBeatOrigin: number | null; // step index where repeat started
+  pitchEditTarget: { channelId: number; stepIndex: number; isTriplet: boolean } | null;
+  selectedScale: string;
+
+  // Pitch edit modal
+  openPitchEdit: (channelId: number, stepIndex: number, isTriplet: boolean) => void;
+  closePitchEdit: () => void;
+  setScale: (scale: string) => void;
 
   // Punch-in FX
   setPunchIn: (effect: PunchInEffect) => void;
@@ -62,6 +75,8 @@ interface AppStore {
   removeSample: (channelId: number) => void;
   toggleStep: (channelId: number, stepIndex: number) => void;
   toggleTripletStep: (channelId: number, stepIndex: number) => void;
+  setStepPitch: (channelId: number, stepIndex: number, semitones: number) => void;
+  setTripletStepPitch: (channelId: number, stepIndex: number, semitones: number) => void;
   clearSteps: (channelId: number) => void;
   setChannelVolume: (channelId: number, volume: number) => void;
   toggleMute: (channelId: number) => void;
@@ -102,6 +117,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
   activeSceneId: null,
   punchIn: null,
   repeatBeatOrigin: null,
+  pitchEditTarget: null,
+  selectedScale: 'Chromatic',
+
+  openPitchEdit: (channelId, stepIndex, isTriplet) =>
+    set({ pitchEditTarget: { channelId, stepIndex, isTriplet } }),
+
+  closePitchEdit: () =>
+    set({ pitchEditTarget: null }),
+
+  setScale: (scale) =>
+    set({ selectedScale: scale }),
 
   setPunchIn: (effect) =>
     set((state) => ({
@@ -117,16 +143,22 @@ export const useAppStore = create<AppStore>((set, get) => ({
       if (state.scenes.length >= 4) return state;
       const id = nextSceneId++;
       const channelSteps: Record<number, boolean[]> = {};
+      const channelStepPitches: Record<number, number[]> = {};
       const channelTripletSteps: Record<number, boolean[]> = {};
+      const channelTripletStepPitches: Record<number, number[]> = {};
       state.channels.forEach((ch) => {
         channelSteps[ch.id] = [...ch.steps];
+        channelStepPitches[ch.id] = [...ch.stepPitches];
         channelTripletSteps[ch.id] = [...ch.tripletSteps];
+        channelTripletStepPitches[ch.id] = [...ch.tripletStepPitches];
       });
       const scene: Scene = {
         id,
         name: name || `Scene ${id}`,
         channelSteps,
+        channelStepPitches,
         channelTripletSteps,
+        channelTripletStepPitches,
         bpm: state.sequencer.bpm,
         stepCount: state.sequencer.stepCount,
         swing: state.sequencer.swing,
@@ -143,17 +175,23 @@ export const useAppStore = create<AppStore>((set, get) => ({
       let scenes = state.scenes;
       if (state.activeSceneId !== null) {
         const channelSteps: Record<number, boolean[]> = {};
+        const channelStepPitches: Record<number, number[]> = {};
         const channelTripletSteps: Record<number, boolean[]> = {};
+        const channelTripletStepPitches: Record<number, number[]> = {};
         state.channels.forEach((ch) => {
           channelSteps[ch.id] = [...ch.steps];
+          channelStepPitches[ch.id] = [...ch.stepPitches];
           channelTripletSteps[ch.id] = [...ch.tripletSteps];
+          channelTripletStepPitches[ch.id] = [...ch.tripletStepPitches];
         });
         scenes = scenes.map((s) =>
           s.id === state.activeSceneId
             ? {
                 ...s,
                 channelSteps,
+                channelStepPitches,
                 channelTripletSteps,
+                channelTripletStepPitches,
                 bpm: state.sequencer.bpm,
                 stepCount: state.sequencer.stepCount,
                 swing: state.sequencer.swing,
@@ -165,16 +203,26 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const tripletCount = getTripletStepCount(scene.stepCount);
       const newChannels = state.channels.map((ch) => {
         const savedSteps = scene.channelSteps[ch.id];
+        const savedStepPitches = scene.channelStepPitches?.[ch.id];
         const savedTripletSteps = scene.channelTripletSteps?.[ch.id];
+        const savedTripletStepPitches = scene.channelTripletStepPitches?.[ch.id];
         const steps = new Array(scene.stepCount).fill(false);
+        const stepPitches = new Array(scene.stepCount).fill(0);
         const tripletSteps = new Array(tripletCount).fill(false);
+        const tripletStepPitches = new Array(tripletCount).fill(0);
         if (savedSteps) {
           savedSteps.forEach((s, i) => { if (i < scene.stepCount) steps[i] = s; });
+        }
+        if (savedStepPitches) {
+          savedStepPitches.forEach((p, i) => { if (i < scene.stepCount) stepPitches[i] = p; });
         }
         if (savedTripletSteps) {
           savedTripletSteps.forEach((s, i) => { if (i < tripletCount) tripletSteps[i] = s; });
         }
-        return { ...ch, steps, tripletSteps };
+        if (savedTripletStepPitches) {
+          savedTripletStepPitches.forEach((p, i) => { if (i < tripletCount) tripletStepPitches[i] = p; });
+        }
+        return { ...ch, steps, stepPitches, tripletSteps, tripletStepPitches };
       });
       return {
         scenes,
@@ -199,10 +247,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
   updateScene: (sceneId) =>
     set((state) => {
       const channelSteps: Record<number, boolean[]> = {};
+      const channelStepPitches: Record<number, number[]> = {};
       const channelTripletSteps: Record<number, boolean[]> = {};
+      const channelTripletStepPitches: Record<number, number[]> = {};
       state.channels.forEach((ch) => {
         channelSteps[ch.id] = [...ch.steps];
+        channelStepPitches[ch.id] = [...ch.stepPitches];
         channelTripletSteps[ch.id] = [...ch.tripletSteps];
+        channelTripletStepPitches[ch.id] = [...ch.tripletStepPitches];
       });
       return {
         scenes: state.scenes.map((s) =>
@@ -210,7 +262,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
             ? {
                 ...s,
                 channelSteps,
+                channelStepPitches,
                 channelTripletSteps,
+                channelTripletStepPitches,
                 bpm: state.sequencer.bpm,
                 stepCount: state.sequencer.stepCount,
                 swing: state.sequencer.swing,
@@ -234,9 +288,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
         .map((ch) => {
           const newSteps = new Array(stepCount).fill(false);
           ch.steps.forEach((s, i) => { if (i < stepCount) newSteps[i] = s; });
+          const newStepPitches = new Array(stepCount).fill(0);
+          ch.stepPitches.forEach((p, i) => { if (i < stepCount) newStepPitches[i] = p; });
           const newTripletSteps = new Array(tripletCount).fill(false);
           ch.tripletSteps.forEach((s, i) => { if (i < tripletCount) newTripletSteps[i] = s; });
-          return { ...ch, steps: newSteps, tripletSteps: newTripletSteps };
+          const newTripletStepPitches = new Array(tripletCount).fill(0);
+          ch.tripletStepPitches.forEach((p, i) => { if (i < tripletCount) newTripletStepPitches[i] = p; });
+          return { ...ch, steps: newSteps, stepPitches: newStepPitches, tripletSteps: newTripletSteps, tripletStepPitches: newTripletStepPitches };
         });
 
       // Beat channels first, then user channels
@@ -283,7 +341,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         id: newId,
         label: `${source.label} copy`,
         steps: [...source.steps],
+        stepPitches: [...source.stepPitches],
         tripletSteps: [...source.tripletSteps],
+        tripletStepPitches: [...source.tripletStepPitches],
         sample: source.sample ? { ...source.sample, id: `sample_${Date.now()}` } : null,
       };
       const idx = state.channels.findIndex((ch) => ch.id === channelId);
@@ -330,6 +390,30 @@ export const useAppStore = create<AppStore>((set, get) => ({
       ),
     })),
 
+  setStepPitch: (channelId, stepIndex, semitones) =>
+    set((state) => ({
+      channels: state.channels.map((ch) =>
+        ch.id === channelId
+          ? {
+              ...ch,
+              stepPitches: ch.stepPitches.map((p, i) => (i === stepIndex ? semitones : p)),
+            }
+          : ch
+      ),
+    })),
+
+  setTripletStepPitch: (channelId, stepIndex, semitones) =>
+    set((state) => ({
+      channels: state.channels.map((ch) =>
+        ch.id === channelId
+          ? {
+              ...ch,
+              tripletStepPitches: ch.tripletStepPitches.map((p, i) => (i === stepIndex ? semitones : p)),
+            }
+          : ch
+      ),
+    })),
+
   clearSteps: (channelId) =>
     set((state) => ({
       channels: state.channels.map((ch) =>
@@ -337,7 +421,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
           ? {
               ...ch,
               steps: new Array(state.sequencer.stepCount).fill(false),
+              stepPitches: new Array(state.sequencer.stepCount).fill(0),
               tripletSteps: new Array(getTripletStepCount(state.sequencer.stepCount)).fill(false),
+              tripletStepPitches: new Array(getTripletStepCount(state.sequencer.stepCount)).fill(0),
             }
           : ch
       ),
@@ -425,11 +511,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
         ch.steps.forEach((s, i) => {
           if (i < count) newSteps[i] = s;
         });
+        const newStepPitches = new Array(count).fill(0);
+        ch.stepPitches.forEach((p, i) => {
+          if (i < count) newStepPitches[i] = p;
+        });
         const newTripletSteps = new Array(tripletCount).fill(false);
         ch.tripletSteps.forEach((s, i) => {
           if (i < tripletCount) newTripletSteps[i] = s;
         });
-        return { ...ch, steps: newSteps, tripletSteps: newTripletSteps };
+        const newTripletStepPitches = new Array(tripletCount).fill(0);
+        ch.tripletStepPitches.forEach((p, i) => {
+          if (i < tripletCount) newTripletStepPitches[i] = p;
+        });
+        return { ...ch, steps: newSteps, stepPitches: newStepPitches, tripletSteps: newTripletSteps, tripletStepPitches: newTripletStepPitches };
       });
       return {
         channels: newChannels,
