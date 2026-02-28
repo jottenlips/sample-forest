@@ -16,7 +16,9 @@ export interface Channel {
   label: string;
   sample: Sample | null;
   steps: boolean[];
+  stepPitches: number[]; // semitone offset per step (0 = no change)
   tripletSteps: boolean[];
+  tripletStepPitches: number[]; // semitone offset per triplet step
   muted: boolean;
   solo: boolean;
   volume: number;
@@ -48,7 +50,9 @@ export interface Scene {
   name: string;
   // Snapshot of each channel's step pattern, keyed by channel id
   channelSteps: Record<number, boolean[]>;
+  channelStepPitches: Record<number, number[]>;
   channelTripletSteps: Record<number, boolean[]>;
+  channelTripletStepPitches: Record<number, number[]>;
   bpm: number;
   stepCount: number;
   swing: number;

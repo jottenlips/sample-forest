@@ -159,7 +159,9 @@ export function ExportScreen({ onClose }: ExportScreenProps) {
       stepCount: ss.scene.stepCount,
       swing: ss.scene.swing,
       channelSteps: ss.scene.channelSteps,
+      channelStepPitches: ss.scene.channelStepPitches,
       channelTripletSteps: ss.scene.channelTripletSteps,
+      channelTripletStepPitches: ss.scene.channelTripletStepPitches,
     }));
 
     const nativeChannels = channels.map((ch) => ({
@@ -169,7 +171,9 @@ export function ExportScreen({ onClose }: ExportScreenProps) {
       muted: ch.muted,
       solo: ch.solo,
       steps: ch.steps,
+      stepPitches: ch.stepPitches,
       tripletSteps: ch.tripletSteps,
+      tripletStepPitches: ch.tripletStepPitches,
       trimStartMs: ch.sample?.trimStartMs ?? 0,
       trimEndMs: ch.sample?.trimEndMs ?? 0,
       playbackRate: ch.sample?.playbackRate ?? 1.0,

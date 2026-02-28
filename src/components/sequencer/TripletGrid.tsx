@@ -20,30 +20,51 @@ const TripletButton = React.memo(function TripletButton({
   const active = useAppStore(
     (s) => s.channels.find((c) => c.id === channelId)?.tripletSteps[stepIndex] ?? false
   );
+  const pitch = useAppStore(
+    (s) => s.channels.find((c) => c.id === channelId)?.tripletStepPitches[stepIndex] ?? 0
+  );
   const isCurrent = useAppStore(
     (s) => s.sequencer.isPlaying && s.sequencer.currentTripletStep === stepIndex
   );
   const toggleTripletStep = useAppStore((s) => s.toggleTripletStep);
+  const openPitchEdit = useAppStore((s) => s.openPitchEdit);
 
   const isGroupStart = stepIndex % 3 === 0;
+  const hasPitch = active && pitch !== 0;
 
   const bgColor =
     isCurrent && active
       ? colors.seafoam
       : isCurrent
         ? colors.fern
-        : active
-          ? '#7B68EE'
-          : isGroupStart
-            ? '#2A3F55'
-            : '#1E2D3D';
+        : active && hasPitch
+          ? (pitch > 0 ? '#4A6FA4' : '#8A4A7A')
+          : active
+            ? '#7B68EE'
+            : isGroupStart
+              ? '#2A3F55'
+              : '#1E2D3D';
+
+  const handleLongPress = () => {
+    if (active) {
+      openPitchEdit(channelId, stepIndex, true);
+    }
+  };
 
   return (
     <TouchableOpacity
       style={[styles.step, { backgroundColor: bgColor }]}
       onPress={() => toggleTripletStep(channelId, stepIndex)}
+      onLongPress={handleLongPress}
+      delayLongPress={300}
       activeOpacity={0.6}
-    />
+    >
+      {hasPitch && (
+        <Text style={styles.pitchLabel}>
+          {pitch > 0 ? '+' : ''}{pitch}
+        </Text>
+      )}
+    </TouchableOpacity>
   );
 });
 
@@ -110,6 +131,13 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     height: 20,
     margin: 1,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+  pitchLabel: {
+    color: colors.white,
+    fontSize: 6,
+    fontWeight: '800' as const,
   },
   stepSpacer: {
     flex: 1,

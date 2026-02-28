@@ -11,6 +11,7 @@ import { useSequencer } from '../hooks/useSequencer';
 import { useChannelPlayer } from '../hooks/useChannelPlayer';
 import { setupAudioMode } from '../utils/permissions';
 import { BeatPresetBar } from '../components/BeatPresetBar';
+import { StepPitchModal } from '../components/sequencer/StepPitchModal';
 
 interface MainScreenProps {
   onEditSample: (channelId: number) => void;
@@ -28,7 +29,7 @@ function ChannelPlayerBridge({
 }) {
   const channel = useAppStore((s) => s.channels.find((c) => c.id === channelId));
   const { trigger } = useChannelPlayer(channel || {
-    id: channelId, label: '', sample: null, steps: [], tripletSteps: [], muted: true, solo: false, volume: 0,
+    id: channelId, label: '', sample: null, steps: [], stepPitches: [], tripletSteps: [], tripletStepPitches: [], muted: true, solo: false, volume: 0,
   });
 
   useEffect(() => {
@@ -99,6 +100,8 @@ export function MainScreen({ onEditSample, onOpenSynth, onChopSong, onExport }: 
 
         <PunchInBar />
       </ScrollView>
+
+      <StepPitchModal />
     </SafeAreaView>
   );
 }
