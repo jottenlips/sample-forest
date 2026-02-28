@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Modal, Platform, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -8,6 +8,16 @@ import { ChopScreen } from './src/screens/ChopScreen';
 import { ExportScreen } from './src/screens/ExportScreen';
 import { SynthModal } from './src/components/synth/SynthModal';
 import { colors } from './src/theme/colors';
+
+// Inject global CSS on web to eliminate Safari tap delay and improve touch responsiveness
+if (Platform.OS === 'web' && typeof document !== 'undefined') {
+  const style = document.createElement('style');
+  style.textContent = `
+    * { touch-action: manipulation; }
+    input, textarea { touch-action: auto; }
+  `;
+  document.head.appendChild(style);
+}
 
 export default function App() {
   const [editingChannel, setEditingChannel] = useState<number | null>(null);
@@ -79,6 +89,10 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: colors.forest,
-    ...(Platform.OS === 'web' ? { userSelect: 'none' as any } : {}),
+    ...(Platform.OS === 'web' ? {
+      userSelect: 'none' as any,
+      // Eliminate Safari's 300ms tap delay on all touch targets
+      touchAction: 'manipulation' as any,
+    } : {}),
   },
 });

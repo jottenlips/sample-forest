@@ -9,8 +9,6 @@ import {
   addStepChangeListener,
 } from '../../modules/audio-engine';
 
-type TriggerCallback = (channelId: number) => void;
-
 // ──────────────────────────────────────────────────
 // iOS: Native AVAudioEngine sequencer via Expo Module
 // ──────────────────────────────────────────────────
@@ -52,13 +50,10 @@ function useSequencerIOS() {
   }, []);
 
   // Subscribe to channel changes with a stable selector.
-  // Only track structural changes that affect audio playback,
-  // not step position changes.
   const channelCount = useAppStore((s) => s.channels.length);
   const channelMuteSoloKey = useAppStore((s) =>
     s.channels.map((ch) => `${ch.id}:${ch.muted}:${ch.solo}`).join(',')
   );
-  // Track step patterns by joining just the toggled indices (sparse, stable)
   const channelStepKey = useAppStore((s) =>
     s.channels.map((ch) => {
       const on = ch.steps.reduce((acc, v, i) => v ? acc + i + ',' : acc, '');
@@ -66,7 +61,6 @@ function useSequencerIOS() {
       return `${ch.id}:${on}|${ton}`;
     }).join(';')
   );
-  // Track sample assignments
   const channelSampleKey = useAppStore((s) =>
     s.channels.map((ch) => `${ch.id}:${ch.sample?.id ?? ''}:${ch.volume}`).join(',')
   );
@@ -76,16 +70,14 @@ function useSequencerIOS() {
     isStartedRef.current = true;
     setPlaying(true);
 
-    // Listen for step changes from native
     if (!listenerRef.current) {
       listenerRef.current = addStepChangeListener(
         (event: { currentStep: number; currentTripletStep: number }) => {
-          // Batch both updates into a single setState
           useAppStore.setState((s) => {
             const seq = s.sequencer;
             if (seq.currentStep === event.currentStep &&
                 seq.currentTripletStep === event.currentTripletStep) {
-              return s; // no change
+              return s;
             }
             return {
               sequencer: {
@@ -113,7 +105,6 @@ function useSequencerIOS() {
   }, [setPlaying]);
 
   // Hot-update config when relevant state changes during playback.
-  // Debounced to batch rapid changes and reduce bridge traffic.
   useEffect(() => {
     if (!isStartedRef.current) return;
     if (configUpdateTimer.current) clearTimeout(configUpdateTimer.current);
@@ -148,231 +139,233 @@ function useSequencerIOS() {
 }
 
 // ──────────────────────────────────────────────────
-// Web/Android: existing JS setInterval implementation
+// Web: AudioContext-based sequencer
+// Uses AudioContext.currentTime (hardware clock) for sample-accurate scheduling.
+// A simple setInterval pump fires every 25ms to look ahead and schedule audio.
+// The timer's precision doesn't matter — source.start(exactTime) is sample-accurate.
 // ──────────────────────────────────────────────────
-function useSequencerJS(triggerCallbacks: Map<number, TriggerCallback>) {
-  const bpm = useAppStore((s) => s.sequencer.bpm);
-  const swing = useAppStore((s) => s.sequencer.swing);
-  const stepCount = useAppStore((s) => s.sequencer.stepCount);
+function useSequencerWeb() {
   const isPlaying = useAppStore((s) => s.sequencer.isPlaying);
-  const setCurrentStep = useAppStore((s) => s.setCurrentStep);
   const setPlaying = useAppStore((s) => s.setPlaying);
-  const setCurrentTripletStep = useAppStore((s) => s.setCurrentTripletStep);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const nextStepTimeRef = useRef<number>(0);
-  const currentStepRef = useRef<number>(0);
-  const nextTripletTimeRef = useRef<number>(0);
-  const currentTripletStepRef = useRef<number>(0);
 
-  const LOOKAHEAD_MS = 100;
-  const TICK_MS = 25;
-
-  const getStepDurationMs = useCallback(() => {
-    return (60000 / bpm) / 4;
-  }, [bpm]);
-
-  const getTripletStepDurationMs = useCallback(() => {
-    return ((60000 / bpm) / 4) * (2 / 3);
-  }, [bpm]);
-
-  const scheduleStep = useCallback(
-    (stepIndex: number, delay: number) => {
-      const state = useAppStore.getState();
-      const hasSolo = state.channels.some((ch) => ch.solo);
-      const punchIn = state.punchIn;
-
-      let swapMap: Map<number, number> | null = null;
-      if (punchIn === 'swap' && state.channels.length > 1) {
-        const channelIds = state.channels.map((c) => c.id);
-        swapMap = new Map();
-        for (let i = 0; i < channelIds.length; i++) {
-          const sourceIdx = (i + 1) % channelIds.length;
-          swapMap.set(channelIds[i], channelIds[sourceIdx]);
-        }
-      }
-
-      setTimeout(() => {
-        setCurrentStep(stepIndex);
-
-        state.channels.forEach((channel) => {
-          if (!channel.steps[stepIndex]) return;
-          if (channel.muted) return;
-          if (hasSolo && !channel.solo) return;
-
-          if (punchIn === 'swap' && swapMap) {
-            const swappedId = swapMap.get(channel.id);
-            if (swappedId !== undefined) {
-              const swappedChannel = state.channels.find((c) => c.id === swappedId);
-              if (swappedChannel?.sample) {
-                const callback = triggerCallbacks.get(swappedId);
-                if (callback) callback(swappedId);
-              }
-            }
-          } else {
-            if (!channel.sample) return;
-            const callback = triggerCallbacks.get(channel.id);
-            if (callback) callback(channel.id);
-          }
-        });
-      }, Math.max(0, delay));
-    },
-    [triggerCallbacks, setCurrentStep],
-  );
-
-  const scheduleTripletStep = useCallback(
-    (stepIndex: number, delay: number) => {
-      const state = useAppStore.getState();
-      const hasSolo = state.channels.some((ch) => ch.solo);
-      const punchIn = state.punchIn;
-
-      let swapMap: Map<number, number> | null = null;
-      if (punchIn === 'swap' && state.channels.length > 1) {
-        const channelIds = state.channels.map((c) => c.id);
-        swapMap = new Map();
-        for (let i = 0; i < channelIds.length; i++) {
-          const sourceIdx = (i + 1) % channelIds.length;
-          swapMap.set(channelIds[i], channelIds[sourceIdx]);
-        }
-      }
-
-      setTimeout(() => {
-        setCurrentTripletStep(stepIndex);
-
-        state.channels.forEach((channel) => {
-          if (!channel.tripletSteps[stepIndex]) return;
-          if (channel.muted) return;
-          if (hasSolo && !channel.solo) return;
-
-          if (punchIn === 'swap' && swapMap) {
-            const swappedId = swapMap.get(channel.id);
-            if (swappedId !== undefined) {
-              const swappedChannel = state.channels.find((c) => c.id === swappedId);
-              if (swappedChannel?.sample) {
-                const callback = triggerCallbacks.get(swappedId);
-                if (callback) callback(swappedId);
-              }
-            }
-          } else {
-            if (!channel.sample) return;
-            const callback = triggerCallbacks.get(channel.id);
-            if (callback) callback(channel.id);
-          }
-        });
-      }, Math.max(0, delay));
-    },
-    [triggerCallbacks, setCurrentTripletStep],
-  );
-
-  const schedulerTick = useCallback(() => {
-    const now = Date.now();
-    const baseStepDuration = getStepDurationMs();
-    const baseTripletDuration = getTripletStepDurationMs();
-    const state = useAppStore.getState();
-    const punchIn = state.punchIn;
-    const tripletCount = getTripletStepCount(state.sequencer.stepCount);
-
-    let stepDuration = baseStepDuration;
-    let tripletDuration = baseTripletDuration;
-    if (punchIn === 'double') {
-      stepDuration = baseStepDuration / 2;
-      tripletDuration = baseTripletDuration / 2;
-    } else if (punchIn === 'half') {
-      stepDuration = baseStepDuration * 2;
-      tripletDuration = baseTripletDuration * 2;
-    }
-
-    const swingAmount = (state.sequencer.swing / 100) * 0.75;
-
-    while (nextStepTimeRef.current < now + LOOKAHEAD_MS) {
-      let step = currentStepRef.current;
-
-      if (punchIn === 'repeat' && state.repeatBeatOrigin !== null) {
-        const beatOrigin = state.repeatBeatOrigin;
-        const beatLength = 4;
-        step = beatOrigin + ((step - beatOrigin) % beatLength + beatLength) % beatLength;
-      }
-
-      const isOffbeat = step % 2 === 1;
-      const swingDelayMs = isOffbeat ? swingAmount * stepDuration : 0;
-      const delay = nextStepTimeRef.current - now + swingDelayMs;
-      scheduleStep(step, delay);
-
-      nextStepTimeRef.current += stepDuration;
-      currentStepRef.current =
-        (currentStepRef.current + 1) % state.sequencer.stepCount;
-    }
-
-    while (nextTripletTimeRef.current < now + LOOKAHEAD_MS) {
-      let tripletStep = currentTripletStepRef.current;
-
-      if (punchIn === 'repeat' && state.repeatBeatOrigin !== null) {
-        const tripletBeatOrigin = Math.floor(state.repeatBeatOrigin / 4) * 6;
-        const tripletBeatLength = 6;
-        tripletStep = tripletBeatOrigin + ((tripletStep - tripletBeatOrigin) % tripletBeatLength + tripletBeatLength) % tripletBeatLength;
-      }
-
-      const delay = nextTripletTimeRef.current - now;
-      scheduleTripletStep(tripletStep, delay);
-
-      nextTripletTimeRef.current += tripletDuration;
-      currentTripletStepRef.current =
-        (currentTripletStepRef.current + 1) % tripletCount;
-    }
-  }, [getStepDurationMs, getTripletStepDurationMs, scheduleStep, scheduleTripletStep]);
+  const schedulerRef = useRef<{
+    timer: ReturnType<typeof setInterval> | null;
+    nextStepTime: number;
+    nextTripletTime: number;
+    currentStep: number;
+    currentTripletStep: number;
+    lastUIUpdate: number;
+  }>({
+    timer: null,
+    nextStepTime: 0,
+    nextTripletTime: 0,
+    currentStep: 0,
+    currentTripletStep: 0,
+    lastUIUpdate: 0,
+  });
 
   const start = useCallback(() => {
-    if (intervalRef.current) return;
-
-    currentStepRef.current = 0;
-    currentTripletStepRef.current = 0;
-    nextStepTimeRef.current = Date.now();
-    nextTripletTimeRef.current = Date.now();
+    // Lazy import so native never loads this module
+    const { webAudioEngine } = require('../audio/webAudioEngine');
+    webAudioEngine.resume();
     setPlaying(true);
 
-    intervalRef.current = setInterval(schedulerTick, TICK_MS);
-  }, [schedulerTick, setPlaying]);
+    const s = schedulerRef.current;
+    const now: number = webAudioEngine.currentTime;
+    s.currentStep = 0;
+    s.currentTripletStep = 0;
+    s.nextStepTime = now;
+    s.nextTripletTime = now;
+    s.lastUIUpdate = 0;
+
+    const LOOKAHEAD = 0.1; // 100ms look-ahead window
+    const TICK_MS = 25;    // pump interval (precision doesn't matter)
+    const UI_THROTTLE = 0.1; // ~10fps for step highlight
+
+    s.timer = setInterval(() => {
+      const state = useAppStore.getState();
+      const { bpm, stepCount, swing } = state.sequencer;
+      const { punchIn, repeatBeatOrigin, channels } = state;
+
+      const now: number = webAudioEngine.currentTime;
+      const baseStepDur = 60 / bpm / 4; // seconds per 16th note
+      const baseTripletDur = baseStepDur * (2 / 3);
+
+      let stepDur = baseStepDur;
+      let tripletDur = baseTripletDur;
+
+      if (punchIn === 'double') {
+        stepDur = baseStepDur / 2;
+        tripletDur = baseTripletDur / 2;
+      } else if (punchIn === 'half') {
+        stepDur = baseStepDur * 2;
+        tripletDur = baseTripletDur * 2;
+      }
+
+      const swingAmount = (swing / 100) * 0.75;
+      const hasSolo = channels.some((ch) => ch.solo);
+
+      // Build swap map if needed
+      let swapMap: Record<number, number> | null = null;
+      if (punchIn === 'swap' && channels.length > 1) {
+        swapMap = {};
+        for (let i = 0; i < channels.length; i++) {
+          swapMap[channels[i].id] = channels[(i + 1) % channels.length].id;
+        }
+      }
+
+      // Schedule normal steps within the look-ahead window
+      while (s.nextStepTime < now + LOOKAHEAD) {
+        let step = s.currentStep;
+
+        if (punchIn === 'repeat' && repeatBeatOrigin !== null) {
+          const beatLength = 4;
+          step = repeatBeatOrigin +
+            ((step - repeatBeatOrigin) % beatLength + beatLength) % beatLength;
+        }
+
+        const isOffbeat = step % 2 === 1;
+        const swingDelay = isOffbeat ? swingAmount * stepDur : 0;
+        const scheduleTime = s.nextStepTime + swingDelay;
+
+        for (const ch of channels) {
+          if (step >= ch.steps.length || !ch.steps[step]) continue;
+          if (ch.muted) continue;
+          if (hasSolo && !ch.solo) continue;
+          if (!ch.sample) continue;
+
+          let target = ch;
+          if (punchIn === 'swap' && swapMap) {
+            const swappedId = swapMap[ch.id];
+            if (swappedId !== undefined) {
+              const swapped = channels.find((c) => c.id === swappedId);
+              if (swapped?.sample) {
+                target = swapped;
+              } else {
+                continue;
+              }
+            }
+          }
+
+          const sample = target.sample!;
+          webAudioEngine.scheduleSample(
+            sample.id,
+            scheduleTime,
+            sample.volume * target.volume,
+            sample.playbackRate,
+            sample.trimStartMs ?? 0,
+            sample.trimEndMs ?? 0,
+            sample.durationMs,
+          );
+        }
+
+        s.nextStepTime += stepDur;
+        s.currentStep = (s.currentStep + 1) % stepCount;
+      }
+
+      // Schedule triplet steps
+      const tripletCount = getTripletStepCount(stepCount);
+      while (s.nextTripletTime < now + LOOKAHEAD) {
+        let tripletStep = s.currentTripletStep;
+
+        if (punchIn === 'repeat' && repeatBeatOrigin !== null) {
+          const tripletBeatOrigin = Math.floor(repeatBeatOrigin / 4) * 6;
+          const tripletBeatLength = 6;
+          tripletStep = tripletBeatOrigin +
+            ((tripletStep - tripletBeatOrigin) % tripletBeatLength + tripletBeatLength) % tripletBeatLength;
+        }
+
+        const scheduleTime = s.nextTripletTime;
+
+        for (const ch of channels) {
+          if (tripletStep >= ch.tripletSteps.length || !ch.tripletSteps[tripletStep]) continue;
+          if (ch.muted) continue;
+          if (hasSolo && !ch.solo) continue;
+          if (!ch.sample) continue;
+
+          let target = ch;
+          if (punchIn === 'swap' && swapMap) {
+            const swappedId = swapMap[ch.id];
+            if (swappedId !== undefined) {
+              const swapped = channels.find((c) => c.id === swappedId);
+              if (swapped?.sample) {
+                target = swapped;
+              } else {
+                continue;
+              }
+            }
+          }
+
+          const sample = target.sample!;
+          webAudioEngine.scheduleSample(
+            sample.id,
+            scheduleTime,
+            sample.volume * target.volume,
+            sample.playbackRate,
+            sample.trimStartMs ?? 0,
+            sample.trimEndMs ?? 0,
+            sample.durationMs,
+          );
+        }
+
+        s.nextTripletTime += tripletDur;
+        s.currentTripletStep = (s.currentTripletStep + 1) % Math.max(1, tripletCount);
+      }
+
+      // UI step update (throttled)
+      if (now - s.lastUIUpdate >= UI_THROTTLE) {
+        s.lastUIUpdate = now;
+        useAppStore.setState((prev) => {
+          const seq = prev.sequencer;
+          if (seq.currentStep === s.currentStep &&
+              seq.currentTripletStep === s.currentTripletStep) {
+            return prev;
+          }
+          return {
+            sequencer: {
+              ...seq,
+              currentStep: s.currentStep,
+              currentTripletStep: s.currentTripletStep,
+            },
+          };
+        });
+      }
+    }, TICK_MS);
+  }, [setPlaying]);
 
   const stop = useCallback(() => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
+    const s = schedulerRef.current;
+    if (s.timer) {
+      clearInterval(s.timer);
+      s.timer = null;
     }
     setPlaying(false);
-    setCurrentStep(0);
-    setCurrentTripletStep(0);
-    currentStepRef.current = 0;
-    currentTripletStepRef.current = 0;
-  }, [setPlaying, setCurrentStep, setCurrentTripletStep]);
+    useAppStore.setState((prev) => ({
+      sequencer: { ...prev.sequencer, currentStep: 0, currentTripletStep: 0 },
+    }));
+  }, [setPlaying]);
 
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
+      if (schedulerRef.current.timer) {
+        clearInterval(schedulerRef.current.timer);
+        schedulerRef.current.timer = null;
       }
     };
   }, []);
-
-  useEffect(() => {
-    if (isPlaying && intervalRef.current) {
-      clearInterval(intervalRef.current);
-      nextStepTimeRef.current = Date.now();
-      nextTripletTimeRef.current = Date.now();
-      intervalRef.current = setInterval(schedulerTick, TICK_MS);
-    }
-  }, [bpm, schedulerTick, isPlaying]);
 
   return { start, stop, isPlaying };
 }
 
 // ──────────────────────────────────────────────────
-// Exported hook: picks native vs JS based on platform
+// Exported hook: picks native vs web based on platform
 // ──────────────────────────────────────────────────
-export function useSequencer(triggerCallbacks?: Map<number, TriggerCallback>) {
+export function useSequencer() {
   if (isNativeAvailable) {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     return useSequencerIOS();
   }
   // eslint-disable-next-line react-hooks/rules-of-hooks
-  return useSequencerJS(triggerCallbacks ?? new Map());
+  return useSequencerWeb();
 }

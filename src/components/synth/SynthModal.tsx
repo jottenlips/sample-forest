@@ -5,6 +5,8 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
+  Platform,
+  Alert,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { Audio } from 'expo-av';
@@ -204,15 +206,24 @@ export function SynthModal({ channelId, onClose }: SynthModalProps) {
   }, [isPreviewPlaying, getParams, masterVolume]);
 
   const handleAdd = useCallback(async () => {
-    const params = getParams();
-    const layerNames = layers.map((l) => {
-      const note = NOTE_FREQUENCIES[l.freqIndex].note;
-      return `${l.waveform.slice(0, 3)} ${note}`;
-    });
-    const name = layerNames.join(' + ');
-    const sample = await createMultiSynthSample(params, name);
-    loadSample(channelId, sample);
-    onClose();
+    try {
+      const params = getParams();
+      const layerNames = layers.map((l) => {
+        const note = NOTE_FREQUENCIES[l.freqIndex].note;
+        return `${l.waveform.slice(0, 3)} ${note}`;
+      });
+      const name = layerNames.join(' + ');
+      const sample = await createMultiSynthSample(params, name);
+      loadSample(channelId, sample);
+      onClose();
+    } catch (err) {
+      console.error('Failed to add synth to channel:', err);
+      if (Platform.OS === 'web') {
+        alert(`Synth error: ${err}`);
+      } else {
+        Alert.alert('Synth Error', `${err}`);
+      }
+    }
   }, [getParams, layers, channelId, loadSample, onClose]);
 
   useEffect(() => {

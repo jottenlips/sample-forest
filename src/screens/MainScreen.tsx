@@ -11,7 +11,6 @@ import { useSequencer } from '../hooks/useSequencer';
 import { useChannelPlayer } from '../hooks/useChannelPlayer';
 import { setupAudioMode } from '../utils/permissions';
 import { BeatPresetBar } from '../components/BeatPresetBar';
-import { isNativeAvailable } from '../../modules/audio-engine';
 
 interface MainScreenProps {
   onEditSample: (channelId: number) => void;
@@ -49,35 +48,9 @@ export function MainScreen({ onEditSample, onOpenSynth, onChopSong, onExport }: 
   const addChannel = useAppStore((s) => s.addChannel);
   const triggerRef = useRef<Map<number, () => void>>(new Map());
 
-  // On iOS, the native sequencer handles triggers directly.
-  // triggerCallbacks are only needed for the JS sequencer (web/Android).
-  const triggerCallbacks = useRef(
-    new Map<number, (channelId: number) => void>(),
-  );
-
-  useEffect(() => {
-    if (isNativeAvailable) return; // Not needed when native engine is available
-    const map = triggerCallbacks.current;
-    const idSet = new Set(channelIds);
-    for (const id of channelIds) {
-      if (!map.has(id)) {
-        map.set(id, (channelId: number) => {
-          const trigger = triggerRef.current.get(channelId);
-          if (trigger) trigger();
-        });
-      }
-    }
-    for (const id of map.keys()) {
-      if (!idSet.has(id)) {
-        map.delete(id);
-      }
-    }
-  }, [channelIds]);
-
-  // On iOS: no triggerCallbacks needed. On web: pass the callback map.
-  const { start, stop, isPlaying } = useSequencer(
-    isNativeAvailable ? undefined : triggerCallbacks.current,
-  );
+  // Sequencer schedules audio directly (native AVAudioEngine on iOS,
+  // Web Audio API on web). No trigger callbacks needed.
+  const { start, stop, isPlaying } = useSequencer();
 
   useEffect(() => {
     setupAudioMode();
