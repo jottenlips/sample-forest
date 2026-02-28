@@ -19,6 +19,7 @@ import { useAppStore } from "../state/useAppStore";
 import { encodeWav } from "../utils/wavEncoder";
 import { detectBpm, beatLengthSec } from "../utils/bpmDetect";
 import { saveSampleFile, generateWaveformData } from "../utils/audioFiles";
+import { useRecorder } from "../hooks/useRecorder";
 
 const NUM_CHOPS = 8;
 
@@ -59,6 +60,7 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
   const [chopping, setChopping] = useState(false);
   const [previewingIdx, setPreviewingIdx] = useState<number | null>(null);
   const previewSoundRef = useRef<Audio.Sound | null>(null);
+  const { isRecording, recordingDuration, startRecording, stopRecording } = useRecorder();
 
   const screenWidth = Dimensions.get("window").width;
   const waveformWidth = screenWidth - 48;
@@ -182,6 +184,54 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
       }
     }
   }, [processAudioBuffer]);
+
+  const handleToggleRecording = useCallback(async () => {
+    if (isRecording) {
+      setLoading(true);
+      setLoadingMessage("Processing recording...");
+      const sample = await stopRecording();
+      if (sample) {
+        try {
+          if (Platform.OS === "web") {
+            // On web, decode the recording blob into an AudioBuffer
+            const response = await fetch(sample.uri);
+            const arrayBuffer = await response.arrayBuffer();
+            const audioCtx = new (globalThis as any).AudioContext();
+            const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+            processAudioBuffer(decoded, sample.name);
+          } else {
+            // On native, create a fake AudioBuffer-like object
+            const durationSec = sample.durationMs / 1000;
+            const fakeSampleRate = 44100;
+            const fakeLength = Math.floor(durationSec * fakeSampleRate);
+            const fakeChannelData = new Float32Array(fakeLength);
+            for (let i = 0; i < fakeLength; i++) {
+              fakeChannelData[i] = Math.random() * 0.5;
+            }
+            const fakeBuffer = {
+              duration: durationSec,
+              sampleRate: fakeSampleRate,
+              length: fakeLength,
+              getChannelData: () => fakeChannelData,
+              _nativeUri: sample.uri,
+              _isNative: true,
+            } as any;
+            processAudioBuffer(fakeBuffer, sample.name);
+          }
+        } catch (e) {
+          console.error("Failed to process recording:", e);
+          setError("Failed to process recording");
+        }
+      }
+      setLoading(false);
+    } else {
+      setError("");
+      const started = await startRecording();
+      if (!started) {
+        setError("Microphone permission denied");
+      }
+    }
+  }, [isRecording, startRecording, stopRecording, processAudioBuffer]);
 
   const handleReshuffle = useCallback(() => {
     if (!audioBuffer) return;
@@ -529,15 +579,38 @@ export function ChopScreen({ onClose }: ChopScreenProps) {
               <ActivityIndicator size="large" color={colors.sage} />
               <Text style={styles.loadingText}>{loadingMessage}</Text>
             </>
+          ) : isRecording ? (
+            <>
+              <Text style={styles.recordingTime}>
+                {Math.floor(recordingDuration / 60000)}:{String(Math.floor((recordingDuration % 60000) / 1000)).padStart(2, "0")}
+              </Text>
+              <TouchableOpacity
+                style={[styles.recordBtn, styles.recordBtnActive]}
+                onPress={handleToggleRecording}
+              >
+                <View style={styles.recordStopIcon} />
+              </TouchableOpacity>
+              <Text style={styles.recordingLabel}>Tap to stop</Text>
+            </>
           ) : (
             <>
-              <TouchableOpacity
-                style={styles.uploadBtn}
-                onPress={handlePickFile}
-              >
-                <Text style={styles.uploadIcon}>+</Text>
-                <Text style={styles.uploadText}>Upload File</Text>
-              </TouchableOpacity>
+              <View style={styles.uploadButtons}>
+                <TouchableOpacity
+                  style={styles.uploadBtn}
+                  onPress={handlePickFile}
+                >
+                  <Text style={styles.uploadIcon}>+</Text>
+                  <Text style={styles.uploadText}>Upload File</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.recordBtn}
+                  onPress={handleToggleRecording}
+                >
+                  <View style={styles.recordDot} />
+                  <Text style={styles.recordText}>Record</Text>
+                </TouchableOpacity>
+              </View>
 
               {!!error && <Text style={styles.errorText}>{error}</Text>}
             </>
@@ -802,10 +875,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 16,
   },
+  uploadButtons: {
+    flexDirection: "row",
+    gap: 24,
+    alignItems: "center",
+  },
   uploadBtn: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
+    width: 130,
+    height: 130,
+    borderRadius: 65,
     borderWidth: 2,
     borderColor: colors.fern,
     borderStyle: "dashed",
@@ -822,6 +900,48 @@ const styles = StyleSheet.create({
     color: colors.fern,
     fontSize: 14,
     fontWeight: "600",
+  },
+  recordBtn: {
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    borderWidth: 2,
+    borderColor: colors.recording,
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 8,
+  },
+  recordBtnActive: {
+    backgroundColor: colors.recording,
+  },
+  recordDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: colors.recording,
+  },
+  recordStopIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 4,
+    backgroundColor: colors.white,
+  },
+  recordText: {
+    color: colors.recording,
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  recordingTime: {
+    color: colors.recording,
+    fontSize: 36,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
+    marginBottom: 12,
+  },
+  recordingLabel: {
+    color: colors.stone,
+    fontSize: 13,
+    marginTop: 8,
   },
   loadingText: {
     color: colors.sage,
