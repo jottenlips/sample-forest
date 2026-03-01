@@ -7,7 +7,9 @@ struct ChannelConfig {
   let muted: Bool
   let solo: Bool
   let steps: [Bool]
+  let stepPitches: [Float]
   let tripletSteps: [Bool]
+  let tripletStepPitches: [Float]
   let trimStartMs: Double
   let trimEndMs: Double
   let playbackRate: Float
@@ -35,6 +37,10 @@ struct SequencerConfig {
     var channels: [ChannelConfig] = []
     if let chArray = dict["channels"] as? [[String: Any]] {
       for ch in chArray {
+        let rawStepPitches = ch["stepPitches"] as? [Any] ?? []
+        let stepPitches = rawStepPitches.map { Float(($0 as? Double) ?? (Double(($0 as? Int) ?? 0))) }
+        let rawTripletStepPitches = ch["tripletStepPitches"] as? [Any] ?? []
+        let tripletStepPitches = rawTripletStepPitches.map { Float(($0 as? Double) ?? (Double(($0 as? Int) ?? 0))) }
         channels.append(ChannelConfig(
           channelId: ch["channelId"] as? Int ?? 0,
           sampleId: ch["sampleId"] as? String ?? "",
@@ -42,7 +48,9 @@ struct SequencerConfig {
           muted: ch["muted"] as? Bool ?? false,
           solo: ch["solo"] as? Bool ?? false,
           steps: ch["steps"] as? [Bool] ?? [],
+          stepPitches: stepPitches,
           tripletSteps: ch["tripletSteps"] as? [Bool] ?? [],
+          tripletStepPitches: tripletStepPitches,
           trimStartMs: ch["trimStartMs"] as? Double ?? 0,
           trimEndMs: ch["trimEndMs"] as? Double ?? 0,
           playbackRate: Float(ch["playbackRate"] as? Double ?? 1.0)
@@ -309,7 +317,13 @@ class SequencerEngine {
         targetSampleId = channel.sampleId
       }
 
-      scheduleBuffer(sampleId: targetSampleId, at: time, volume: channel.volume, rate: channel.playbackRate, trimStartMs: channel.trimStartMs, trimEndMs: channel.trimEndMs)
+      // Apply per-step pitch offset
+      let pitchSemitones = step < channel.stepPitches.count ? channel.stepPitches[step] : 0
+      let effectiveRate = pitchSemitones != 0
+        ? channel.playbackRate * pow(2.0, pitchSemitones / 12.0)
+        : channel.playbackRate
+
+      scheduleBuffer(sampleId: targetSampleId, at: time, volume: channel.volume, rate: effectiveRate, trimStartMs: channel.trimStartMs, trimEndMs: channel.trimEndMs)
     }
   }
 
@@ -331,7 +345,13 @@ class SequencerEngine {
         targetSampleId = channel.sampleId
       }
 
-      scheduleBuffer(sampleId: targetSampleId, at: time, volume: channel.volume, rate: channel.playbackRate, trimStartMs: channel.trimStartMs, trimEndMs: channel.trimEndMs)
+      // Apply per-step pitch offset
+      let pitchSemitones = step < channel.tripletStepPitches.count ? channel.tripletStepPitches[step] : 0
+      let effectiveRate = pitchSemitones != 0
+        ? channel.playbackRate * pow(2.0, pitchSemitones / 12.0)
+        : channel.playbackRate
+
+      scheduleBuffer(sampleId: targetSampleId, at: time, volume: channel.volume, rate: effectiveRate, trimStartMs: channel.trimStartMs, trimEndMs: channel.trimEndMs)
     }
   }
 

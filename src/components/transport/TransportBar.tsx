@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { colors } from '../../theme/colors';
 import { useAppStore } from '../../state/useAppStore';
@@ -29,7 +29,14 @@ export function TransportBar({ onPlay, onStop, isPlaying }: TransportBarProps) {
       <View style={styles.topRow}>
         <TouchableOpacity
           style={[styles.playButton, isPlaying && styles.playButtonActive]}
-          onPress={isPlaying ? onStop : onPlay}
+          onPress={() => {
+            Alert.alert('DEBUG', `isPlaying: ${isPlaying}, onPlay: ${typeof onPlay}, onStop: ${typeof onStop}`);
+            if (isPlaying) {
+              onStop();
+            } else {
+              onPlay();
+            }
+          }}
           activeOpacity={0.7}
         >
           <Text style={styles.playButtonText}>{isPlaying ? '■' : '▶'}</Text>

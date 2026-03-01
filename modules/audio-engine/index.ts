@@ -35,6 +35,7 @@ if (isIOS) {
     ExpoEventEmitter = core.EventEmitter;
   } catch (e) {
     console.warn('AudioEngine native module not available — using JS fallback');
+    console.error('AudioEngine module load error:', e);
   }
 }
 

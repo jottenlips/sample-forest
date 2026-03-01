@@ -1,4 +1,5 @@
 import { useRef, useCallback, useEffect } from 'react';
+import { Alert } from 'react-native';
 import { useAppStore } from '../state/useAppStore';
 import { getTripletStepCount } from '../types';
 import {
@@ -41,9 +42,9 @@ function useSequencerIOS() {
         muted: ch.muted,
         solo: ch.solo,
         steps: ch.steps,
-        stepPitches: ch.stepPitches,
+        stepPitches: ch.stepPitches ?? [],
         tripletSteps: ch.tripletSteps,
-        tripletStepPitches: ch.tripletStepPitches,
+        tripletStepPitches: ch.tripletStepPitches ?? [],
         trimStartMs: ch.sample?.trimStartMs ?? 0,
         trimEndMs: ch.sample?.trimEndMs ?? 0,
         playbackRate: ch.sample?.playbackRate ?? 1.0,
@@ -68,6 +69,7 @@ function useSequencerIOS() {
   );
 
   const start = useCallback(() => {
+    Alert.alert('Sequencer', `start called, isStarted: ${isStartedRef.current}, isNative: ${isNativeAvailable}`);
     if (isStartedRef.current) return;
     isStartedRef.current = true;
     setPlaying(true);
@@ -94,12 +96,26 @@ function useSequencerIOS() {
     }
 
     const config = buildConfig();
-    startSequencer(config);
+    console.log('[Sequencer] starting with config:', JSON.stringify({
+      bpm: config.bpm,
+      stepCount: config.stepCount,
+      channelCount: config.channels.length,
+      channels: config.channels.map((c: any) => ({ id: c.channelId, sampleId: c.sampleId, stepsActive: c.steps.filter(Boolean).length })),
+    }));
+    startSequencer(config).then(() => {
+      console.log('[Sequencer] startSequencer resolved OK');
+    }).catch((err: any) => {
+      console.error('[Sequencer] Failed to start native sequencer:', err);
+      isStartedRef.current = false;
+      setPlaying(false);
+    });
   }, [buildConfig, setPlaying]);
 
   const stop = useCallback(() => {
     isStartedRef.current = false;
-    stopSequencer();
+    stopSequencer().catch((err: any) => {
+      console.error('Failed to stop native sequencer:', err);
+    });
     setPlaying(false);
     useAppStore.setState((s) => ({
       sequencer: { ...s.sequencer, currentStep: 0, currentTripletStep: 0 },
@@ -253,7 +269,7 @@ function useSequencerWeb() {
           }
 
           const sample = target.sample!;
-          const pitchSemitones = ch.stepPitches[step] ?? 0;
+          const pitchSemitones = ch.stepPitches?.[step] ?? 0;
           const effectiveRate = pitchSemitones !== 0
             ? sample.playbackRate * Math.pow(2, pitchSemitones / 12)
             : sample.playbackRate;
@@ -306,7 +322,7 @@ function useSequencerWeb() {
           }
 
           const sample = target.sample!;
-          const pitchSemitones = ch.tripletStepPitches[tripletStep] ?? 0;
+          const pitchSemitones = ch.tripletStepPitches?.[tripletStep] ?? 0;
           const effectiveRate = pitchSemitones !== 0
             ? sample.playbackRate * Math.pow(2, pitchSemitones / 12)
             : sample.playbackRate;
@@ -375,6 +391,7 @@ function useSequencerWeb() {
 // Exported hook: picks native vs web based on platform
 // ──────────────────────────────────────────────────
 export function useSequencer() {
+  console.warn('[useSequencer] isNativeAvailable:', isNativeAvailable);
   if (isNativeAvailable) {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     return useSequencerIOS();
