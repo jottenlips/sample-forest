@@ -119,14 +119,17 @@ class SequencerEngine {
 
   private var playerFormats: [String: AVAudioFormat] = [:]
 
-  private func getOrCreatePlayerNode(for sampleId: String, format: AVAudioFormat? = nil) -> AVAudioPlayerNode {
-    if let node = playerNodes[sampleId] {
+  private func getOrCreatePlayerNode(for nodeKey: String, format: AVAudioFormat? = nil) -> AVAudioPlayerNode {
+    if let node = playerNodes[nodeKey] {
       // Reconnect if format changed (e.g., mono vs stereo)
-      if let fmt = format, playerFormats[sampleId] != fmt {
+      if let fmt = format, playerFormats[nodeKey] != fmt {
         node.stop()
         engine.disconnectNodeOutput(node)
         engine.connect(node, to: mixer, format: fmt)
-        playerFormats[sampleId] = fmt
+        playerFormats[nodeKey] = fmt
+      }
+      // Always ensure node is playing
+      if !node.isPlaying {
         node.play()
       }
       return node
@@ -134,8 +137,8 @@ class SequencerEngine {
     let node = AVAudioPlayerNode()
     engine.attach(node)
     engine.connect(node, to: mixer, format: format)
-    playerNodes[sampleId] = node
-    if let fmt = format { playerFormats[sampleId] = fmt }
+    playerNodes[nodeKey] = node
+    if let fmt = format { playerFormats[nodeKey] = fmt }
     node.play()
     return node
   }
@@ -200,10 +203,10 @@ class SequencerEngine {
     } else {
       cachedSwapMap = nil
     }
-    // Pre-create nodes for any new samples (format will be set on first schedule)
+    // Pre-create nodes per channel (format will be set on first schedule)
     for channel in config.channels where !channel.sampleId.isEmpty {
       if let buffer = bufferPool.get(sampleId: channel.sampleId) {
-        _ = getOrCreatePlayerNode(for: channel.sampleId, format: buffer.format)
+        _ = getOrCreatePlayerNode(for: "ch_\(channel.channelId)", format: buffer.format)
       }
     }
   }
@@ -336,7 +339,7 @@ class SequencerEngine {
         ? channel.playbackRate * pow(2.0, pitchSemitones / 12.0)
         : channel.playbackRate
 
-      scheduleBuffer(sampleId: targetSampleId, at: time, volume: channel.volume, rate: effectiveRate, trimStartMs: channel.trimStartMs, trimEndMs: channel.trimEndMs)
+      scheduleBuffer(channelId: channel.channelId, sampleId: targetSampleId, at: time, volume: channel.volume, rate: effectiveRate, trimStartMs: channel.trimStartMs, trimEndMs: channel.trimEndMs)
     }
   }
 
@@ -364,14 +367,16 @@ class SequencerEngine {
         ? channel.playbackRate * pow(2.0, pitchSemitones / 12.0)
         : channel.playbackRate
 
-      scheduleBuffer(sampleId: targetSampleId, at: time, volume: channel.volume, rate: effectiveRate, trimStartMs: channel.trimStartMs, trimEndMs: channel.trimEndMs)
+      scheduleBuffer(channelId: channel.channelId, sampleId: targetSampleId, at: time, volume: channel.volume, rate: effectiveRate, trimStartMs: channel.trimStartMs, trimEndMs: channel.trimEndMs)
     }
   }
 
-  private func scheduleBuffer(sampleId: String, at time: Double, volume: Float, rate: Float, trimStartMs: Double, trimEndMs: Double) {
+  private func scheduleBuffer(channelId: Int, sampleId: String, at time: Double, volume: Float, rate: Float, trimStartMs: Double, trimEndMs: Double) {
     guard let buffer = bufferPool.get(sampleId: sampleId) else { return }
 
-    let node = getOrCreatePlayerNode(for: sampleId, format: buffer.format)
+    // Key player nodes by channelId so each channel has independent volume/rate
+    let nodeKey = "ch_\(channelId)"
+    let node = getOrCreatePlayerNode(for: nodeKey, format: buffer.format)
     node.volume = volume
     node.rate = rate
 
