@@ -1,5 +1,4 @@
 import { useRef, useCallback, useEffect } from 'react';
-import { Alert } from 'react-native';
 import { useAppStore } from '../state/useAppStore';
 import { getTripletStepCount } from '../types';
 import {
@@ -69,7 +68,6 @@ function useSequencerIOS() {
   );
 
   const start = useCallback(() => {
-    Alert.alert('Sequencer', `start called, isStarted: ${isStartedRef.current}, isNative: ${isNativeAvailable}`);
     if (isStartedRef.current) return;
     isStartedRef.current = true;
     setPlaying(true);
@@ -96,15 +94,7 @@ function useSequencerIOS() {
     }
 
     const config = buildConfig();
-    console.log('[Sequencer] starting with config:', JSON.stringify({
-      bpm: config.bpm,
-      stepCount: config.stepCount,
-      channelCount: config.channels.length,
-      channels: config.channels.map((c: any) => ({ id: c.channelId, sampleId: c.sampleId, stepsActive: c.steps.filter(Boolean).length })),
-    }));
-    startSequencer(config).then(() => {
-      console.log('[Sequencer] startSequencer resolved OK');
-    }).catch((err: any) => {
+    startSequencer(config).catch((err: any) => {
       console.error('[Sequencer] Failed to start native sequencer:', err);
       isStartedRef.current = false;
       setPlaying(false);
@@ -391,7 +381,6 @@ function useSequencerWeb() {
 // Exported hook: picks native vs web based on platform
 // ──────────────────────────────────────────────────
 export function useSequencer() {
-  console.warn('[useSequencer] isNativeAvailable:', isNativeAvailable);
   if (isNativeAvailable) {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     return useSequencerIOS();

@@ -1,6 +1,7 @@
 {
   "platforms": ["ios"],
   "ios": {
-    "modules": ["AudioEngineModule"]
+    "modules": ["AudioEngineModule"],
+    "podspecPath": "./ios/AudioEngine.podspec"
   }
 }

@@ -117,14 +117,25 @@ class SequencerEngine {
 
   // MARK: - Player Node Management
 
-  private func getOrCreatePlayerNode(for sampleId: String) -> AVAudioPlayerNode {
+  private var playerFormats: [String: AVAudioFormat] = [:]
+
+  private func getOrCreatePlayerNode(for sampleId: String, format: AVAudioFormat? = nil) -> AVAudioPlayerNode {
     if let node = playerNodes[sampleId] {
+      // Reconnect if format changed (e.g., mono vs stereo)
+      if let fmt = format, playerFormats[sampleId] != fmt {
+        node.stop()
+        engine.disconnectNodeOutput(node)
+        engine.connect(node, to: mixer, format: fmt)
+        playerFormats[sampleId] = fmt
+        node.play()
+      }
       return node
     }
     let node = AVAudioPlayerNode()
     engine.attach(node)
-    engine.connect(node, to: mixer, format: nil)
+    engine.connect(node, to: mixer, format: format)
     playerNodes[sampleId] = node
+    if let fmt = format { playerFormats[sampleId] = fmt }
     node.play()
     return node
   }
@@ -189,15 +200,17 @@ class SequencerEngine {
     } else {
       cachedSwapMap = nil
     }
-    // Pre-create nodes for any new samples
+    // Pre-create nodes for any new samples (format will be set on first schedule)
     for channel in config.channels where !channel.sampleId.isEmpty {
-      _ = getOrCreatePlayerNode(for: channel.sampleId)
+      if let buffer = bufferPool.get(sampleId: channel.sampleId) {
+        _ = getOrCreatePlayerNode(for: channel.sampleId, format: buffer.format)
+      }
     }
   }
 
   func triggerOneShot(sampleId: String) {
     guard let buffer = bufferPool.get(sampleId: sampleId) else { return }
-    let node = getOrCreatePlayerNode(for: "oneshot_\(sampleId)")
+    let node = getOrCreatePlayerNode(for: "oneshot_\(sampleId)", format: buffer.format)
     node.stop()
     if !engine.isRunning { try? engine.start() }
     node.play()
@@ -358,7 +371,7 @@ class SequencerEngine {
   private func scheduleBuffer(sampleId: String, at time: Double, volume: Float, rate: Float, trimStartMs: Double, trimEndMs: Double) {
     guard let buffer = bufferPool.get(sampleId: sampleId) else { return }
 
-    let node = getOrCreatePlayerNode(for: sampleId)
+    let node = getOrCreatePlayerNode(for: sampleId, format: buffer.format)
     node.volume = volume
     node.rate = rate
 
@@ -377,12 +390,26 @@ class SequencerEngine {
     let startFrame = min(AVAudioFrameCount(trimStartFrames), totalFrames)
     let frameCount = trimEndFrames > startFrame ? trimEndFrames - startFrame : totalFrames
 
+    // Create a trimmed copy of the buffer if needed
+    let playBuffer: AVAudioPCMBuffer
+    if startFrame > 0 || frameCount < totalFrames {
+      guard let trimmed = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: frameCount) else { return }
+      trimmed.frameLength = frameCount
+      if let src = buffer.floatChannelData, let dst = trimmed.floatChannelData {
+        for ch in 0..<Int(buffer.format.channelCount) {
+          dst[ch].update(from: src[ch].advanced(by: Int(startFrame)), count: Int(frameCount))
+        }
+      }
+      playBuffer = trimmed
+    } else {
+      playBuffer = buffer
+    }
+
     // Schedule at precise AVAudioTime
     let hostTime = secondsToHostTime(time)
     let audioTime = AVAudioTime(hostTime: hostTime)
 
-    // Schedule segment of buffer
-    node.scheduleSegment(buffer, startingFrame: AVAudioFramePosition(startFrame), frameCount: frameCount, at: audioTime)
+    node.scheduleBuffer(playBuffer, at: audioTime, options: [])
   }
 
   // MARK: - Time Utilities
