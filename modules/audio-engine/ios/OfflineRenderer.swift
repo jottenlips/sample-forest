@@ -118,7 +118,9 @@ class OfflineRenderer {
 
         // Get steps for this scene (scene-specific or channel default)
         let steps = scene.channelSteps[channel.channelId] ?? channel.steps
+        let stepPitches = scene.channelStepPitches[channel.channelId] ?? channel.stepPitches
         let tripletSteps = scene.channelTripletSteps[channel.channelId] ?? channel.tripletSteps
+        let tripletStepPitches = scene.channelTripletStepPitches[channel.channelId] ?? channel.tripletStepPitches
 
         // Calculate trim frames
         let srcSampleRate = srcBuffer.format.sampleRate
@@ -140,6 +142,11 @@ class OfflineRenderer {
           let swingDelay = isOffbeat ? swingAmount * stepDuration : 0
           let time = offset + Double(i) * stepDuration + swingDelay
 
+          let pitchSemitones = i < stepPitches.count ? stepPitches[i] : 0
+          let effectiveRate = pitchSemitones != 0
+            ? rate * pow(2.0, pitchSemitones / 12.0)
+            : rate
+
           mixSample(
             into: &output,
             srcBuffer: srcBuffer,
@@ -147,7 +154,7 @@ class OfflineRenderer {
             frameCount: frameCount,
             atTime: time,
             volume: volume,
-            rate: rate
+            rate: effectiveRate
           )
         }
 
@@ -156,6 +163,11 @@ class OfflineRenderer {
           guard i < tripletSteps.count, tripletSteps[i] else { continue }
           let time = offset + Double(i) * tripletDuration
 
+          let pitchSemitones = i < tripletStepPitches.count ? tripletStepPitches[i] : 0
+          let effectiveRate = pitchSemitones != 0
+            ? rate * pow(2.0, pitchSemitones / 12.0)
+            : rate
+
           mixSample(
             into: &output,
             srcBuffer: srcBuffer,
@@ -163,7 +175,7 @@ class OfflineRenderer {
             frameCount: frameCount,
             atTime: time,
             volume: volume,
-            rate: rate
+            rate: effectiveRate
           )
         }
       }
@@ -297,14 +309,20 @@ class OfflineRenderer {
 
   private func parseChannels(_ dicts: [[String: Any]]) -> [RenderChannel] {
     return dicts.map { ch in
-      RenderChannel(
+      let rawStepPitches = ch["stepPitches"] as? [Any] ?? []
+      let stepPitches = rawStepPitches.map { Float(($0 as? Double) ?? (Double(($0 as? Int) ?? 0))) }
+      let rawTripletStepPitches = ch["tripletStepPitches"] as? [Any] ?? []
+      let tripletStepPitches = rawTripletStepPitches.map { Float(($0 as? Double) ?? (Double(($0 as? Int) ?? 0))) }
+      return RenderChannel(
         channelId: ch["channelId"] as? Int ?? 0,
         sampleId: ch["sampleId"] as? String ?? "",
         volume: Float(ch["volume"] as? Double ?? 0.8),
         muted: ch["muted"] as? Bool ?? false,
         solo: ch["solo"] as? Bool ?? false,
         steps: ch["steps"] as? [Bool] ?? [],
+        stepPitches: stepPitches,
         tripletSteps: ch["tripletSteps"] as? [Bool] ?? [],
+        tripletStepPitches: tripletStepPitches,
         trimStartMs: ch["trimStartMs"] as? Double ?? 0,
         trimEndMs: ch["trimEndMs"] as? Double ?? 0,
         playbackRate: Float(ch["playbackRate"] as? Double ?? 1.0)
@@ -327,6 +345,15 @@ class OfflineRenderer {
         }
       }
 
+      var channelStepPitches: [Int: [Float]] = [:]
+      if let cspDict = s["channelStepPitches"] as? [String: [Any]] {
+        for (key, val) in cspDict {
+          if let intKey = Int(key) {
+            channelStepPitches[intKey] = val.map { Float(($0 as? Double) ?? (Double(($0 as? Int) ?? 0))) }
+          }
+        }
+      }
+
       var channelTripletSteps: [Int: [Bool]] = [:]
       if let ctsDict = s["channelTripletSteps"] as? [String: [Bool]] {
         for (key, val) in ctsDict {
@@ -336,12 +363,23 @@ class OfflineRenderer {
         }
       }
 
+      var channelTripletStepPitches: [Int: [Float]] = [:]
+      if let ctspDict = s["channelTripletStepPitches"] as? [String: [Any]] {
+        for (key, val) in ctspDict {
+          if let intKey = Int(key) {
+            channelTripletStepPitches[intKey] = val.map { Float(($0 as? Double) ?? (Double(($0 as? Int) ?? 0))) }
+          }
+        }
+      }
+
       return RenderScene(
         bpm: bpm,
         stepCount: stepCount,
         swing: swing,
         channelSteps: channelSteps,
-        channelTripletSteps: channelTripletSteps
+        channelStepPitches: channelStepPitches,
+        channelTripletSteps: channelTripletSteps,
+        channelTripletStepPitches: channelTripletStepPitches
       )
     }
   }
@@ -356,7 +394,9 @@ private struct RenderChannel {
   let muted: Bool
   let solo: Bool
   let steps: [Bool]
+  let stepPitches: [Float]
   let tripletSteps: [Bool]
+  let tripletStepPitches: [Float]
   let trimStartMs: Double
   let trimEndMs: Double
   let playbackRate: Float
@@ -367,5 +407,7 @@ private struct RenderScene {
   let stepCount: Int
   let swing: Double
   let channelSteps: [Int: [Bool]]
+  let channelStepPitches: [Int: [Float]]
   let channelTripletSteps: [Int: [Bool]]
+  let channelTripletStepPitches: [Int: [Float]]
 }

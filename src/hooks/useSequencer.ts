@@ -41,9 +41,9 @@ function useSequencerIOS() {
         muted: ch.muted,
         solo: ch.solo,
         steps: ch.steps,
-        stepPitches: ch.stepPitches,
+        stepPitches: ch.stepPitches ?? [],
         tripletSteps: ch.tripletSteps,
-        tripletStepPitches: ch.tripletStepPitches,
+        tripletStepPitches: ch.tripletStepPitches ?? [],
         trimStartMs: ch.sample?.trimStartMs ?? 0,
         trimEndMs: ch.sample?.trimEndMs ?? 0,
         playbackRate: ch.sample?.playbackRate ?? 1.0,
@@ -94,12 +94,18 @@ function useSequencerIOS() {
     }
 
     const config = buildConfig();
-    startSequencer(config);
+    startSequencer(config).catch((err: any) => {
+      console.error('[Sequencer] Failed to start native sequencer:', err);
+      isStartedRef.current = false;
+      setPlaying(false);
+    });
   }, [buildConfig, setPlaying]);
 
   const stop = useCallback(() => {
     isStartedRef.current = false;
-    stopSequencer();
+    stopSequencer().catch((err: any) => {
+      console.error('Failed to stop native sequencer:', err);
+    });
     setPlaying(false);
     useAppStore.setState((s) => ({
       sequencer: { ...s.sequencer, currentStep: 0, currentTripletStep: 0 },
@@ -253,7 +259,7 @@ function useSequencerWeb() {
           }
 
           const sample = target.sample!;
-          const pitchSemitones = ch.stepPitches[step] ?? 0;
+          const pitchSemitones = ch.stepPitches?.[step] ?? 0;
           const effectiveRate = pitchSemitones !== 0
             ? sample.playbackRate * Math.pow(2, pitchSemitones / 12)
             : sample.playbackRate;
@@ -306,7 +312,7 @@ function useSequencerWeb() {
           }
 
           const sample = target.sample!;
-          const pitchSemitones = ch.tripletStepPitches[tripletStep] ?? 0;
+          const pitchSemitones = ch.tripletStepPitches?.[tripletStep] ?? 0;
           const effectiveRate = pitchSemitones !== 0
             ? sample.playbackRate * Math.pow(2, pitchSemitones / 12)
             : sample.playbackRate;

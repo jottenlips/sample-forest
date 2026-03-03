@@ -72,9 +72,9 @@ export const StepPitchModal = React.memo(function StepPitchModal() {
     const ch = s.channels.find((c) => c.id === s.pitchEditTarget!.channelId);
     if (!ch) return 0;
     if (s.pitchEditTarget!.isTriplet) {
-      return ch.tripletStepPitches[s.pitchEditTarget!.stepIndex] ?? 0;
+      return ch.tripletStepPitches?.[s.pitchEditTarget!.stepIndex] ?? 0;
     }
-    return ch.stepPitches[s.pitchEditTarget!.stepIndex] ?? 0;
+    return ch.stepPitches?.[s.pitchEditTarget!.stepIndex] ?? 0;
   });
 
   if (!target) return null;

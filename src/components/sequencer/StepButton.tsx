@@ -16,7 +16,7 @@ export const StepButton = React.memo(function StepButton({
     (s) => s.channels.find((c) => c.id === channelId)?.steps[stepIndex] ?? false
   );
   const pitch = useAppStore(
-    (s) => s.channels.find((c) => c.id === channelId)?.stepPitches[stepIndex] ?? 0
+    (s) => s.channels.find((c) => c.id === channelId)?.stepPitches?.[stepIndex] ?? 0
   );
   const isCurrentStep = useAppStore(
     (s) => s.sequencer.isPlaying && s.sequencer.currentStep === stepIndex

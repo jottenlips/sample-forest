@@ -21,7 +21,7 @@ const TripletButton = React.memo(function TripletButton({
     (s) => s.channels.find((c) => c.id === channelId)?.tripletSteps[stepIndex] ?? false
   );
   const pitch = useAppStore(
-    (s) => s.channels.find((c) => c.id === channelId)?.tripletStepPitches[stepIndex] ?? 0
+    (s) => s.channels.find((c) => c.id === channelId)?.tripletStepPitches?.[stepIndex] ?? 0
   );
   const isCurrent = useAppStore(
     (s) => s.sequencer.isPlaying && s.sequencer.currentTripletStep === stepIndex
