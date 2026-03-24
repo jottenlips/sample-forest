@@ -44,6 +44,7 @@ interface ChannelRowProps {
   channelId: number;
   onEditSample: (channelId: number) => void;
   onOpenSynth: (channelId: number) => void;
+  onOpenGrainSynth: (channelId: number) => void;
   triggerRef: React.MutableRefObject<Map<number, () => void>>;
   canRemove: boolean;
 }
@@ -52,6 +53,7 @@ export const ChannelRow = React.memo(function ChannelRow({
   channelId,
   onEditSample,
   onOpenSynth,
+  onOpenGrainSynth,
   triggerRef,
   canRemove,
 }: ChannelRowProps) {
@@ -208,6 +210,9 @@ export const ChannelRow = React.memo(function ChannelRow({
             </TouchableOpacity>
             <TouchableOpacity style={styles.actionBtn} onPress={() => onOpenSynth(channelId)}>
               <Text style={styles.actionBtnText}>~ Synth</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.actionBtn} onPress={() => onOpenGrainSynth(channelId)}>
+              <Text style={styles.actionBtnText}>Grain</Text>
             </TouchableOpacity>
           </View>
         )}

@@ -7,6 +7,7 @@ import { SampleEditScreen } from './src/screens/SampleEditScreen';
 import { ChopScreen } from './src/screens/ChopScreen';
 import { ExportScreen } from './src/screens/ExportScreen';
 import { SynthModal } from './src/components/synth/SynthModal';
+import { GrainSynthScreen } from './src/screens/GrainSynthScreen';
 import { colors } from './src/theme/colors';
 
 // Inject global CSS on web to eliminate Safari tap delay and improve touch responsiveness
@@ -24,6 +25,7 @@ export default function App() {
   const [synthChannel, setSynthChannel] = useState<number | null>(null);
   const [showChop, setShowChop] = useState(false);
   const [showExport, setShowExport] = useState(false);
+  const [grainSynthChannel, setGrainSynthChannel] = useState<number | null>(null);
 
   return (
     <GestureHandlerRootView style={styles.root}>
@@ -32,6 +34,7 @@ export default function App() {
           onEditSample={(channelId) => setEditingChannel(channelId)}
           onOpenSynth={(channelId) => setSynthChannel(channelId)}
           onChopSong={() => setShowChop(true)}
+          onOpenGrainSynth={(channelId) => setGrainSynthChannel(channelId)}
           onExport={() => setShowExport(true)}
         />
 
@@ -59,6 +62,20 @@ export default function App() {
             <SynthModal
               channelId={synthChannel}
               onClose={() => setSynthChannel(null)}
+            />
+          )}
+        </Modal>
+
+        <Modal
+          visible={grainSynthChannel !== null}
+          animationType="slide"
+          presentationStyle="pageSheet"
+          onRequestClose={() => setGrainSynthChannel(null)}
+        >
+          {grainSynthChannel !== null && (
+            <GrainSynthScreen
+              channelId={grainSynthChannel}
+              onClose={() => setGrainSynthChannel(null)}
             />
           )}
         </Modal>
