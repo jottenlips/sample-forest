@@ -139,6 +139,52 @@ class WebAudioEngine {
     }
   }
 
+  /**
+   * Play a sample pitched by semitones. Returns a stop function.
+   * Used by the keyboard to hold notes while a key is pressed.
+   */
+  playNote(
+    sampleId: string,
+    semitones: number,
+    volume: number,
+    trimStartMs: number,
+    trimEndMs: number,
+    durationMs: number,
+  ): (() => void) | null {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== 'running') return null;
+
+    const buffer = this.buffers.get(sampleId);
+    if (!buffer) return null;
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    source.playbackRate.value = Math.pow(2, semitones / 12);
+
+    const gain = ctx.createGain();
+    gain.gain.value = volume;
+
+    source.connect(gain);
+    gain.connect(ctx.destination);
+
+    const offset = trimStartMs / 1000;
+    const loopEnd = (trimEndMs > 0 && trimEndMs < durationMs)
+      ? trimEndMs / 1000
+      : buffer.duration;
+    source.loopStart = offset;
+    source.loopEnd = loopEnd;
+    source.start(0, offset);
+
+    return () => {
+      try {
+        gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.02);
+        source.stop(ctx.currentTime + 0.02);
+      } catch { /* already stopped */ }
+    };
+  }
+
   /** Play a sample immediately (for preview / tap). */
   triggerSample(
     sampleId: string,

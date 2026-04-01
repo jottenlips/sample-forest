@@ -11,6 +11,7 @@
     "deploy:prod": "npm run build:web && cd ampt-backend && ampt deploy production"
   },
   "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/slider": "5.0.1",
     "expo": "~54.0.33",
     "expo-av": "~16.0.8",

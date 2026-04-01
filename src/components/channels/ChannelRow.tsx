@@ -13,6 +13,7 @@ import { SequencerGrid } from "../sequencer/SequencerGrid";
 import { TripletGrid } from "../sequencer/TripletGrid";
 import { useRecorder } from "../../hooks/useRecorder";
 import { pickAudioFile, createSampleFromFile } from "../../utils/audioFiles";
+import { saveSampleToBank } from "../../utils/sampleBank";
 import { Audio } from "expo-av";
 import { Sample } from "../../types";
 
@@ -45,6 +46,8 @@ interface ChannelRowProps {
   onEditSample: (channelId: number) => void;
   onOpenSynth: (channelId: number) => void;
   onOpenGrainSynth: (channelId: number) => void;
+  onOpenKeyboard: (channelId: number) => void;
+  onOpenBank: (channelId: number) => void;
   triggerRef: React.MutableRefObject<Map<number, () => void>>;
   canRemove: boolean;
 }
@@ -54,6 +57,8 @@ export const ChannelRow = React.memo(function ChannelRow({
   onEditSample,
   onOpenSynth,
   onOpenGrainSynth,
+  onOpenKeyboard,
+  onOpenBank,
   triggerRef,
   canRemove,
 }: ChannelRowProps) {
@@ -62,6 +67,7 @@ export const ChannelRow = React.memo(function ChannelRow({
   const solo = useAppStore((s) => s.channels.find((c) => c.id === channelId)?.solo ?? false);
   const sampleName = useAppStore((s) => s.channels.find((c) => c.id === channelId)?.sample?.name ?? null);
   const hasSample = useAppStore((s) => !!s.channels.find((c) => c.id === channelId)?.sample);
+  const sample = useAppStore((s) => s.channels.find((c) => c.id === channelId)?.sample ?? null);
   const loadSample = useAppStore((s) => s.loadSample);
   const removeSample = useAppStore((s) => s.removeSample);
   const removeChannel = useAppStore((s) => s.removeChannel);
@@ -130,6 +136,21 @@ export const ChannelRow = React.memo(function ChannelRow({
     }
   };
 
+  const [saving, setSaving] = useState(false);
+
+  const handleSaveToBank = async () => {
+    if (!sample) return;
+    setSaving(true);
+    try {
+      await saveSampleToBank(sample);
+      const msg = `"${sample.name}" saved to sample bank.`;
+      Platform.OS === 'web' ? alert(msg) : Alert.alert('Saved', msg);
+    } catch (err) {
+      console.error('Save to bank failed:', err);
+    }
+    setSaving(false);
+  };
+
   return (
     <View style={[styles.container, muted && styles.muted]}>
       <View style={styles.header}>
@@ -184,6 +205,19 @@ export const ChannelRow = React.memo(function ChannelRow({
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.iconBtn}
+              onPress={() => onOpenKeyboard(channelId)}
+            >
+              <Text style={styles.keysBtnText}>♪</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.iconBtn}
+              onPress={handleSaveToBank}
+              disabled={saving}
+            >
+              <Text style={styles.saveBtnText}>{saving ? '...' : '↓'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.iconBtn}
               onPress={() => onEditSample(channelId)}
             >
               <Text style={styles.editBtnText}>✎</Text>
@@ -213,6 +247,9 @@ export const ChannelRow = React.memo(function ChannelRow({
             </TouchableOpacity>
             <TouchableOpacity style={styles.actionBtn} onPress={() => onOpenGrainSynth(channelId)}>
               <Text style={styles.actionBtnText}>Grain</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.actionBtn} onPress={() => onOpenBank(channelId)}>
+              <Text style={styles.actionBtnText}>Bank</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -299,6 +336,15 @@ const styles = StyleSheet.create({
   },
   iconBtn: {
     padding: 6,
+  },
+  keysBtnText: {
+    color: colors.mint,
+    fontSize: 24,
+  },
+  saveBtnText: {
+    color: colors.seafoam,
+    fontSize: 24,
+    fontWeight: "700",
   },
   editBtnText: {
     color: colors.sage,
