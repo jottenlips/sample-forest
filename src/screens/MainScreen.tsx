@@ -16,6 +16,9 @@ import { StepPitchModal } from '../components/sequencer/StepPitchModal';
 interface MainScreenProps {
   onEditSample: (channelId: number) => void;
   onOpenSynth: (channelId: number) => void;
+  onOpenGrainSynth: (channelId: number) => void;
+  onOpenKeyboard: (channelId: number) => void;
+  onOpenBank: (channelId: number) => void;
   onChopSong: () => void;
   onExport: () => void;
 }
@@ -42,7 +45,7 @@ function ChannelPlayerBridge({
   return null;
 }
 
-export function MainScreen({ onEditSample, onOpenSynth, onChopSong, onExport }: MainScreenProps) {
+export function MainScreen({ onEditSample, onOpenSynth, onOpenGrainSynth, onOpenKeyboard, onOpenBank, onChopSong, onExport }: MainScreenProps) {
   // Only subscribe to channel IDs — avoid re-rendering when steps/samples change
   const channelIds = useAppStore(useShallow((s) => s.channels.map((c) => c.id)));
   const channelCount = useAppStore((s) => s.channels.length);
@@ -93,6 +96,9 @@ export function MainScreen({ onEditSample, onOpenSynth, onChopSong, onExport }: 
             channelId={id}
             onEditSample={onEditSample}
             onOpenSynth={onOpenSynth}
+            onOpenGrainSynth={onOpenGrainSynth}
+            onOpenKeyboard={onOpenKeyboard}
+            onOpenBank={onOpenBank}
             triggerRef={triggerRef}
             canRemove={channelCount > 1}
           />

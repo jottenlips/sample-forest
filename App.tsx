@@ -7,7 +7,11 @@ import { SampleEditScreen } from './src/screens/SampleEditScreen';
 import { ChopScreen } from './src/screens/ChopScreen';
 import { ExportScreen } from './src/screens/ExportScreen';
 import { SynthModal } from './src/components/synth/SynthModal';
+import { GrainSynthScreen } from './src/screens/GrainSynthScreen';
+import { KeyboardScreen } from './src/screens/KeyboardScreen';
+import { SampleBankModal } from './src/components/SampleBankModal';
 import { colors } from './src/theme/colors';
+import { useAppStore } from './src/state/useAppStore';
 
 // Inject global CSS on web to eliminate Safari tap delay and improve touch responsiveness
 if (Platform.OS === 'web' && typeof document !== 'undefined') {
@@ -24,6 +28,10 @@ export default function App() {
   const [synthChannel, setSynthChannel] = useState<number | null>(null);
   const [showChop, setShowChop] = useState(false);
   const [showExport, setShowExport] = useState(false);
+  const [grainSynthChannel, setGrainSynthChannel] = useState<number | null>(null);
+  const [keyboardChannel, setKeyboardChannel] = useState<number | null>(null);
+  const [bankChannel, setBankChannel] = useState<number | null>(null);
+  const loadSample = useAppStore((s) => s.loadSample);
 
   return (
     <GestureHandlerRootView style={styles.root}>
@@ -32,6 +40,9 @@ export default function App() {
           onEditSample={(channelId) => setEditingChannel(channelId)}
           onOpenSynth={(channelId) => setSynthChannel(channelId)}
           onChopSong={() => setShowChop(true)}
+          onOpenGrainSynth={(channelId) => setGrainSynthChannel(channelId)}
+          onOpenKeyboard={(channelId) => setKeyboardChannel(channelId)}
+          onOpenBank={(channelId) => setBankChannel(channelId)}
           onExport={() => setShowExport(true)}
         />
 
@@ -62,6 +73,48 @@ export default function App() {
             />
           )}
         </Modal>
+
+        <Modal
+          visible={grainSynthChannel !== null}
+          animationType="slide"
+          presentationStyle="pageSheet"
+          onRequestClose={() => setGrainSynthChannel(null)}
+        >
+          {grainSynthChannel !== null && (
+            <GrainSynthScreen
+              channelId={grainSynthChannel}
+              onClose={() => setGrainSynthChannel(null)}
+            />
+          )}
+        </Modal>
+
+        <Modal
+          visible={keyboardChannel !== null}
+          animationType="slide"
+          presentationStyle="pageSheet"
+          onRequestClose={() => setKeyboardChannel(null)}
+        >
+          {keyboardChannel !== null && (
+            <KeyboardScreen
+              channelId={keyboardChannel}
+              onClose={() => setKeyboardChannel(null)}
+            />
+          )}
+        </Modal>
+
+        <SampleBankModal
+          visible={bankChannel !== null}
+          onClose={() => setBankChannel(null)}
+          onSelect={(sample) => {
+            if (bankChannel !== null) {
+              // Give a fresh ID so the channel player re-loads the audio buffer
+              loadSample(bankChannel, {
+                ...sample,
+                id: `bank_${Date.now()}`,
+              });
+            }
+          }}
+        />
 
         <Modal
           visible={showChop}
